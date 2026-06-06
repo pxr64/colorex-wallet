@@ -1,114 +1,106 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { T } from '../theme'
-import { Logo, Mono } from '../atoms'
-import { generateWallet } from '../../wallet/keys'
-import { rgbReady, wasm } from '../../wallet/rgb'
+import { AssetIcon, Eyebrow, Icon, Mono, Tag } from '../atoms'
+import { TopBar, CopyChip } from '../chrome'
+import { ASSETS } from '../data'
+import { type Asset, formatUnits, importAsset, listAssets, receiveAddress } from '../../wallet/store'
 
-interface RunResult {
-  version: string
-  mnemonic: string
-  address: string
-  schemaCount: number
-  bytes: { stash: number; state: number; index: number }
-}
+// Lean, sign-centric Home. The asset list is fully dynamic (from the wasm RGB
+// stock via the store) — no hardcoded assets, no Swap. Signature requests are
+// the MVP centerpiece; they arrive from the Colorex dApp (a sample is openable
+// here for now).
+export function Home({ onLock, onSign }: { onLock: () => void; onSign: () => void }) {
+  const [assets, setAssets] = useState<Asset[] | null>(null)
+  const [addr, setAddr] = useState<string | undefined>()
+  const [importMsg, setImportMsg] = useState<string | null>(null)
 
-// First runnable wallet surface: generate a wallet in JS, derive its receive
-// address + initialize the RGB stock in wasm, and show it — proving the full
-// RGB + bitcoin engine runs inside the extension. Onboarding/UX polish follows.
-export function Home() {
-  const [result, setResult] = useState<RunResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    void listAssets().then(setAssets).catch(() => setAssets([]))
+    void receiveAddress().then(setAddr).catch(() => undefined)
+  }, [])
 
-  async function run() {
-    setBusy(true)
-    setError(null)
+  async function onImport() {
     try {
-      const { mnemonic, descriptor } = generateWallet()
-      await rgbReady()
-      const address = wasm.derive_keychain10_address(descriptor, 'signet')
-      const stock = new wasm.RgbStock()
-      const snap = stock.save()
-      setResult({
-        version: wasm.version(),
-        mnemonic,
-        address,
-        schemaCount: stock.schema_count(),
-        bytes: { stash: snap.stash.length, state: snap.state.length, index: snap.index.length },
-      })
+      await importAsset('')
     } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy(false)
+      setImportMsg((e as Error).message)
     }
   }
 
   return (
-    <main style={{ padding: 18, height: '100%', display: 'flex', flexDirection: 'column', gap: 14, overflowY: 'auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Logo size={22} />
-        <h1 style={{ fontSize: 16, fontWeight: 600, margin: 0, letterSpacing: '-0.01em' }}>Colorex Wallet</h1>
-      </div>
-
-      <p style={{ color: T.mute, fontSize: 12.5, lineHeight: 1.6, margin: 0 }}>
-        RGB-on-Bitcoin, self-custodial. The RGB engine + bitcoin wallet run on-device
-        in WebAssembly. Tap below to generate a signet wallet — keys are derived in
-        JS, the address + RGB stock come from wasm.
-      </p>
-
-      <button
-        className="cxw-btn"
-        disabled={busy}
-        onClick={run}
-        style={{ height: 46, border: 'none', borderRadius: 13, background: T.accent, color: T.accentInk, fontFamily: T.body, fontSize: 14.5, fontWeight: 600, boxShadow: '0 10px 26px -12px rgba(184,90,44,0.7)' }}
-      >
-        {busy ? 'Generating…' : 'Generate signet wallet'}
-      </button>
-
-      {error && (
-        <div style={{ border: `1px solid ${T.warn}`, borderRadius: 12, padding: '10px 12px', background: T.okSoft }}>
-          <Mono style={{ fontSize: 11, color: T.warn }}>{error}</Mono>
-        </div>
-      )}
-
-      {result && (
-        <div style={{ display: 'grid', gap: 10 }}>
-          <Field label="RGB receive address (keychain-10)">{result.address}</Field>
-          <Field label="Recovery phrase">{result.mnemonic}</Field>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Stat label="engine" value={result.version.replace('rgb-wasm ', 'v')} />
-            <Stat label="schemas" value={String(result.schemaCount)} />
-            <Stat label="stash" value={`${result.bytes.stash}B`} />
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <TopBar onLock={onLock} />
+      <div className="cxw-scroll" style={{ flex: 1, overflowY: 'auto', padding: '4px 16px 18px', display: 'grid', gap: 16, alignContent: 'start' }}>
+        {/* signature requests — the MVP centerpiece */}
+        <div className="cxw-in" style={{ borderRadius: 16, border: `1px solid ${T.hair}`, background: T.card, padding: '15px 16px', boxShadow: '0 16px 36px -28px rgba(20,16,12,0.4)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 10 }}>
+            <span style={{ width: 30, height: 30, borderRadius: 9, flex: '0 0 auto', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${T.hairStrong}`, background: T.bg, color: T.accent }}><Icon.pen /></span>
+            <div style={{ display: 'grid', gap: 1 }}>
+              <span style={{ fontFamily: T.body, fontSize: 14, fontWeight: 600, color: T.ink }}>Signature requests</span>
+              <Mono style={{ fontSize: 10, color: T.faint }}>from app.colorex.exchange</Mono>
+            </div>
           </div>
-          <Mono style={{ fontSize: 10, color: T.faint, textAlign: 'center' }}>
-            RGB stock initialized + serialized in wasm · ready for IndexedDB
-          </Mono>
+          <Mono style={{ fontSize: 11, color: T.mute }}><span style={{ display: 'block', lineHeight: 1.55, marginBottom: 11 }}>No pending requests. When a Colorex swap needs your signature, the approval prompt opens here.</span></Mono>
+          <button className="cxw-btn" onClick={onSign} style={{ width: '100%', height: 44, border: `1px solid ${T.accent}`, borderRadius: 12, background: T.accentSoft, color: T.accent, fontFamily: T.body, fontSize: 13.5, fontWeight: 600 }}>
+            Open a sample request
+          </button>
         </div>
-      )}
 
-      <p style={{ color: T.faint, fontSize: 10.5, marginTop: 'auto' }}>
-        Preview the signature approval at <code style={{ fontFamily: T.mono, color: T.accent }}>index.html?id=mock</code>
-      </p>
-    </main>
-  )
-}
+        {/* receive address */}
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
+            <Eyebrow>Your RGB receive address</Eyebrow>
+            {addr && <CopyChip text={addr} />}
+          </div>
+          <div style={{ border: `1px solid ${T.hair}`, borderRadius: 13, background: T.bg, padding: '12px 14px' }}>
+            <Mono style={{ fontSize: 11.5, color: addr ? T.ink : T.faint }}><span style={{ lineHeight: 1.6, wordBreak: 'break-all' }}>{addr ?? 'No wallet yet.'}</span></Mono>
+          </div>
+        </div>
 
-function Field({ label, children }: { label: string; children: string }) {
-  return (
-    <div style={{ border: `1px solid ${T.hair}`, borderRadius: 12, padding: '9px 12px', background: T.card }}>
-      <Mono style={{ fontSize: 9.5, color: T.mute, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</Mono>
-      <div style={{ marginTop: 4 }}>
-        <Mono style={{ fontSize: 11.5, color: T.ink, wordBreak: 'break-all', lineHeight: 1.5 }}>{children}</Mono>
+        {/* dynamic asset list */}
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '0 2px 7px' }}>
+            <Eyebrow>Assets</Eyebrow>
+            <Mono style={{ fontSize: 9.5, color: T.faint }}>{assets ? `${assets.length} held` : '…'}</Mono>
+          </div>
+
+          {assets && assets.length === 0 && (
+            <div style={{ border: `1px dashed ${T.hairStrong}`, borderRadius: 13, padding: '16px 14px', textAlign: 'center', display: 'grid', gap: 10, justifyItems: 'center' }}>
+              <Mono style={{ fontSize: 11, color: T.mute }}><span style={{ lineHeight: 1.55 }}>No RGB assets yet. Import one (by consignment) to track it.</span></Mono>
+              <button className="cxw-btn" onClick={onImport} style={{ height: 40, padding: '0 16px', border: 'none', borderRadius: 11, background: T.accent, color: T.accentInk, fontFamily: T.body, fontSize: 13, fontWeight: 600 }}>
+                Import asset
+              </button>
+            </div>
+          )}
+
+          {assets && assets.length > 0 && (
+            <div className="cxw-stagger" style={{ display: 'grid', gap: 1 }}>
+              {assets.map((a) => (
+                <AssetRow key={a.contractId} a={a} />
+              ))}
+            </div>
+          )}
+
+          {importMsg && <Mono style={{ fontSize: 10.5, color: T.warn }}><span style={{ display: 'block', marginTop: 10, lineHeight: 1.5 }}>{importMsg}</span></Mono>}
+        </div>
       </div>
     </div>
   )
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function AssetRow({ a }: { a: Asset }) {
+  const isBtc = ASSETS[a.ticker]?.kind === 'btc'
   return (
-    <div style={{ flex: 1, border: `1px solid ${T.hair}`, borderRadius: 10, padding: '7px 9px', background: T.bg, textAlign: 'center' }}>
-      <div style={{ fontFamily: T.body, fontSize: 13, fontWeight: 600, color: T.ink }}>{value}</div>
-      <Mono style={{ fontSize: 8.5, color: T.faint, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</Mono>
+    <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 12, alignItems: 'center', padding: '11px 12px', borderRadius: 13 }}>
+      <AssetIcon sym={a.ticker} size={38} isRgb={!isBtc} />
+      <div style={{ display: 'grid', gap: 3, minWidth: 0 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ fontFamily: T.body, fontSize: 14, fontWeight: 500, color: T.ink }}>{a.ticker}</span>
+          {!isBtc && <Tag tone="rgb" small>RGB</Tag>}
+        </span>
+        <Mono style={{ fontSize: 10, color: T.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.contractId}</Mono>
+      </div>
+      <span className="cxw-tab" style={{ fontFamily: T.body, fontSize: 14, fontWeight: 500, color: T.ink }}>{formatUnits(a.balance, a.precision)}</span>
     </div>
   )
 }

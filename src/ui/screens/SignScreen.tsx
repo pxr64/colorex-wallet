@@ -19,8 +19,9 @@ const SIGN_FLOW = [
 
 type Step = 'review' | 'signing' | 'done'
 
-export function SignScreen({ requestId }: { requestId: string }) {
+export function SignScreen({ requestId, onClose }: { requestId: string; onClose?: () => void }) {
   const isMock = requestId === 'mock'
+  const close = onClose ?? (() => window.close())
   const [req, setReq] = useState<SignRequest | null>(null)
   const [step, setStep] = useState<Step>('review')
   const [adv, setAdv] = useState(false)
@@ -50,7 +51,7 @@ export function SignScreen({ requestId }: { requestId: string }) {
 
   async function reject() {
     if (!isMock) await chrome.runtime.sendMessage({ kind: 'decide', id: requestId, approve: false })
-    window.close()
+    close()
   }
 
   async function sign() {
@@ -171,7 +172,7 @@ export function SignScreen({ requestId }: { requestId: string }) {
           </div>
         </div>
         <div style={{ padding: '12px 16px 16px', borderTop: `1px solid ${T.hair}`, background: T.bg }}>
-          <button className="cxw-btn" onClick={() => window.close()} style={{ width: '100%', height: 50, border: 'none', borderRadius: 13, background: T.accent, color: T.accentInk, fontFamily: T.body, fontSize: 15, fontWeight: 600, boxShadow: '0 10px 26px -12px rgba(184,90,44,0.7)' }}>
+          <button className="cxw-btn" onClick={close} style={{ width: '100%', height: 50, border: 'none', borderRadius: 13, background: T.accent, color: T.accentInk, fontFamily: T.body, fontSize: 15, fontWeight: 600, boxShadow: '0 10px 26px -12px rgba(184,90,44,0.7)' }}>
             Done
           </button>
         </div>

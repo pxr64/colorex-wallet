@@ -16,7 +16,9 @@ use amplify::confinement::Confined;
 use bpstd::{Network, XpubDerivable};
 use bpwallet::Wallet;
 use rgb::containers::{FileContent, Kit};
+use rgb::contract::FilterIncludeAll;
 use rgb::persistence::{MemIndex, MemStash, MemState, Stock};
+use rgb::stl::AssetSpec;
 use rgb::{RgbDescr, RgbKeychain, TapretKey};
 use strict_encoding::{StrictDeserialize, StrictSerialize};
 use wasm_bindgen::prelude::*;
@@ -179,5 +181,47 @@ impl RgbStock {
             .contracts()
             .map_err(|e| JsError::new(&format!("contracts: {e}")))?
             .count() as u32)
+    }
+
+    /// Every asset the stock holds, as JSON: `[{ contractId, ticker, precision,
+    /// balance }]`. Stock-only — no indexer. `balance` is the sum of all fungible
+    /// allocations the stock has seen (refined to wallet-owned UTXOs once the
+    /// indexer lands). Empty for a fresh wallet.
+    pub fn list_assets(&self) -> Result<String, JsError> {
+        let contracts: Vec<_> = self
+            .stock
+            .contracts()
+            .map_err(|e| JsError::new(&format!("contracts: {e}")))?
+            .collect();
+        let mut out = Vec::with_capacity(contracts.len());
+        for info in contracts {
+            let cid = info.id;
+            let contract = self
+                .stock
+                .contract_data(cid)
+                .map_err(|e| JsError::new(&format!("contract_data: {e}")))?;
+            let (ticker, precision) = match contract.global("spec").next() {
+                Some(v) => {
+                    let spec = AssetSpec::from_strict_val_unchecked(&v);
+                    (spec.ticker().to_owned(), spec.precision.decimals())
+                }
+                None => (cid.to_string(), 0u8),
+            };
+            let mut balance: u64 = 0;
+            for details in contract.schema.owned_types.values() {
+                if let Ok(allocs) = contract.fungible(details.name.clone(), &FilterIncludeAll) {
+                    for alloc in allocs {
+                        balance = balance.saturating_add(alloc.state.value());
+                    }
+                }
+            }
+            out.push(serde_json::json!({
+                "contractId": cid.to_string(),
+                "ticker": ticker,
+                "precision": precision,
+                "balance": balance,
+            }));
+        }
+        Ok(serde_json::Value::Array(out).to_string())
     }
 }
