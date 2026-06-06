@@ -10,7 +10,7 @@ let ready: Promise<void> | null = null
 
 /** Instantiate the wasm module once. Await before touching `wasm.*`. */
 export function rgbReady(): Promise<void> {
-  if (!ready) ready = init(wasmUrl).then(() => undefined)
+  if (!ready) ready = init({ module_or_path: wasmUrl }).then(() => undefined)
   return ready
 }
 

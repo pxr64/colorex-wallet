@@ -6,6 +6,7 @@
 import { rgbReady, wasm } from './rgb'
 import { generateWallet, type GeneratedWallet } from './keys'
 import { decryptSeed, encryptSeed, type Vault } from './vault'
+import { witnessOrds } from './esplora'
 
 export interface Asset {
   contractId: string
@@ -145,8 +146,21 @@ export async function receiveAddress(network = 'signet'): Promise<string | undef
   return wasm.derive_keychain10_address(descriptor, network)
 }
 
-/** Import (accept) an asset by consignment. Gated on the Esplora resolver edge —
- *  see docs/m1-wasm-spike.md (next milestone). */
-export async function importAsset(_consignmentB64: string): Promise<never> {
-  throw new Error('Importing assets needs the Esplora resolver — coming next. Listing held assets is live.')
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64.trim().replace(/\s+/g, ''))
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
+
+/** Import (accept) an RGB asset from a base64 consignment. Parses the witness
+ *  txids in wasm, fetches their chain status via Esplora, then accepts the
+ *  consignment (validate + accept + promote) and persists. */
+export async function importAsset(consignmentB64: string, network = 'signet'): Promise<void> {
+  const s = await openStock()
+  const bytes = b64ToBytes(consignmentB64)
+  const txids = JSON.parse(s.consignment_witness_ids(bytes)) as string[]
+  const ords = await witnessOrds(txids)
+  s.accept_consignment(bytes, JSON.stringify(ords), network)
+  await persist()
 }

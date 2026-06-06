@@ -6,12 +6,13 @@ import { ASSETS } from '../data'
 import { type Asset, formatUnits, importAsset, listAssets, receiveAddress } from '../../wallet/store'
 
 // Lean, sign-centric Home. The asset list is fully dynamic (from the wasm RGB
-// stock via the store) — no hardcoded assets, no Swap. Signature requests are
-// the MVP centerpiece; they arrive from the Colorex dApp (a sample is openable
-// here for now).
+// stock via the store). Import accepts a consignment (Esplora resolver edge).
 export function Home({ onLock, onSign }: { onLock: () => void; onSign: () => void }) {
   const [assets, setAssets] = useState<Asset[] | null>(null)
   const [addr, setAddr] = useState<string | undefined>()
+  const [showImport, setShowImport] = useState(false)
+  const [consignment, setConsignment] = useState('')
+  const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState<string | null>(null)
 
   useEffect(() => {
@@ -19,11 +20,18 @@ export function Home({ onLock, onSign }: { onLock: () => void; onSign: () => voi
     void receiveAddress().then(setAddr).catch(() => undefined)
   }, [])
 
-  async function onImport() {
+  async function doImport() {
+    setImporting(true)
+    setImportMsg(null)
     try {
-      await importAsset('')
+      await importAsset(consignment)
+      setAssets(await listAssets())
+      setConsignment('')
+      setShowImport(false)
     } catch (e) {
       setImportMsg((e as Error).message)
+    } finally {
+      setImporting(false)
     }
   }
 
@@ -61,15 +69,30 @@ export function Home({ onLock, onSign }: { onLock: () => void; onSign: () => voi
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '0 2px 7px' }}>
             <Eyebrow>Assets</Eyebrow>
-            <Mono style={{ fontSize: 9.5, color: T.faint }}>{assets ? `${assets.length} held` : '…'}</Mono>
+            <button className="cxw-btn" onClick={() => setShowImport((v) => !v)} style={{ border: 'none', background: 'transparent', color: T.accent, fontFamily: T.mono, fontSize: 10, letterSpacing: '0.04em', padding: 0 }}>
+              {showImport ? 'cancel' : '+ import'}
+            </button>
           </div>
 
-          {assets && assets.length === 0 && (
-            <div style={{ border: `1px dashed ${T.hairStrong}`, borderRadius: 13, padding: '16px 14px', textAlign: 'center', display: 'grid', gap: 10, justifyItems: 'center' }}>
-              <Mono style={{ fontSize: 11, color: T.mute }}><span style={{ lineHeight: 1.55 }}>No RGB assets yet. Import one (by consignment) to track it.</span></Mono>
-              <button className="cxw-btn" onClick={onImport} style={{ height: 40, padding: '0 16px', border: 'none', borderRadius: 11, background: T.accent, color: T.accentInk, fontFamily: T.body, fontSize: 13, fontWeight: 600 }}>
-                Import asset
+          {showImport && (
+            <div className="cxw-in" style={{ border: `1px solid ${T.hair}`, borderRadius: 13, background: T.card, padding: 12, marginBottom: 10, display: 'grid', gap: 9 }}>
+              <textarea
+                className="cxw-input"
+                value={consignment}
+                onChange={(e) => setConsignment(e.target.value)}
+                rows={3}
+                placeholder="Paste an RGB consignment (base64)…"
+                style={{ width: '100%', border: `1px solid ${T.hair}`, borderRadius: 9, background: T.bg, resize: 'none', fontFamily: T.mono, fontSize: 11, color: T.ink, lineHeight: 1.5, padding: '8px 10px' }}
+              />
+              <button className="cxw-btn" disabled={importing || !consignment.trim()} onClick={doImport} style={{ height: 40, border: 'none', borderRadius: 11, background: T.accent, color: T.accentInk, fontFamily: T.body, fontSize: 13, fontWeight: 600 }}>
+                {importing ? 'Importing…' : 'Import asset'}
               </button>
+            </div>
+          )}
+
+          {assets && assets.length === 0 && !showImport && (
+            <div style={{ border: `1px dashed ${T.hairStrong}`, borderRadius: 13, padding: '16px 14px', textAlign: 'center' }}>
+              <Mono style={{ fontSize: 11, color: T.mute }}><span style={{ lineHeight: 1.55 }}>No RGB assets yet. Import one (by consignment) to track it.</span></Mono>
             </div>
           )}
 
