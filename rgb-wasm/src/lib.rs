@@ -20,13 +20,14 @@ use bpstd::{Address, Keychain, Network, ScriptPubkey, Txid, XpubDerivable};
 use bpwallet::Wallet;
 use rgb::containers::{ConsignmentExt, FileContent, Kit, Transfer, ValidConsignment};
 use rgb::contract::FilterIncludeAll;
+use rgb::invoice::{Beneficiary, Pay2Vout, RgbInvoiceBuilder, XChainNet};
 use rgb::persistence::{MemIndex, MemStash, MemState, StashReadProvider, Stock};
 use rgb::stl::AssetSpec;
 use rgb::validation::{
     ResolveWitness, ValidationConfig, Validity, WitnessResolverError, WitnessStatus,
 };
 use rgb::vm::{WitnessOrd, WitnessPos};
-use rgb::{ChainNet, RgbDescr, RgbKeychain, TapretKey};
+use rgb::{ChainNet, ContractId, RgbDescr, RgbKeychain, StateType, TapretKey};
 use strict_encoding::{StrictDeserialize, StrictSerialize};
 use wasm_bindgen::prelude::*;
 
@@ -377,6 +378,37 @@ impl RgbStock {
             .update_witnesses(resolver, 0, vec![])
             .map_err(|e| JsError::new(&format!("update_witnesses: {e}")))?;
         Ok(())
+    }
+
+    /// Build a witness-vout RGB receive invoice for `amount` of `contract_id`, to
+    /// a fresh keychain-10 address derived from `descriptor`. No anchor/UTXO needed
+    /// — the RGB lands on a NEW output of the maker's swap tx, which the wallet
+    /// owns (keychain-10) and recognizes once the swap confirms. No stash mutation,
+    /// so nothing to persist.
+    pub fn create_invoice(&self, descriptor: &str, contract_id: &str, amount: u64, network: &str) -> Result<String, JsError> {
+        let cid = ContractId::from_str(contract_id)
+            .map_err(|e| JsError::new(&format!("invalid contract id: {e}")))?;
+        let net = btc_network(network)?;
+        let xpub = XpubDerivable::from_str(descriptor)
+            .map_err(|e| JsError::new(&format!("parse descriptor: {e}")))?;
+        let rgb_descr: RgbDescr = TapretKey::from(xpub).into();
+        let mut wallet: Wallet<XpubDerivable, RgbDescr> = Wallet::new_layer1(rgb_descr, net);
+        let addr = wallet.next_address(RgbKeychain::Tapret, false);
+        let beneficiary = Beneficiary::WitnessVout(Pay2Vout::new(addr.payload), None);
+
+        let mut builder = RgbInvoiceBuilder::new(XChainNet::bitcoin(net, beneficiary))
+            .set_contract(cid)
+            .set_amount_raw(amount);
+        // Name the assignment for unambiguous single-assignment fungible schemas
+        // (e.g. NIA); leave unset for ambiguous schemas (still a usable invoice).
+        if let Ok(contract) = self.stock.contract_data(cid) {
+            let atypes = contract.schema.assignment_types_for_state(StateType::Fungible);
+            if atypes.len() == 1 {
+                let name = contract.schema.assignment_name(*atypes[0]).clone();
+                builder = builder.set_assignment_name(name);
+            }
+        }
+        Ok(builder.finish().to_string())
     }
 }
 

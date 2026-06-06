@@ -3,7 +3,7 @@
 // actually built are wired; only create_invoice (blind/witnessReceive) and the
 // taproot signPsbt are still pending wasm work.
 
-import { fundingAddress, importAsset, listAssets as storeListAssets, openStock } from '../wallet/store'
+import { createInvoice, fundingAddress, importAsset, listAssets as storeListAssets, openStock } from '../wallet/store'
 import type { SignInput } from '../types/sign-request'
 import type { AssetBalance, BitcoinNetworkName, ReceiveInvoice, WalletSdk } from './wallet-sdk'
 
@@ -47,12 +47,17 @@ export class StoreWalletSdk implements WalletSdk {
     return addr
   }
 
-  // create_invoice (witness/blind receive) is not yet in wasm.
+  // Blinded-seal receive needs a free anchor (coinselect over the UTXO set) — not
+  // built; the wallet uses witness-vout receives instead.
   blindReceive(): Promise<ReceiveInvoice> {
     return PENDING('blindReceive')
   }
-  witnessReceive(): Promise<ReceiveInvoice> {
-    return PENDING('witnessReceive')
+  async witnessReceive(params: { assetId?: string; amount?: number }): Promise<ReceiveInvoice> {
+    if (!params.assetId || params.amount == null) {
+      throw new Error('witnessReceive needs assetId + amount')
+    }
+    const invoice = await createInvoice(params.assetId, params.amount, this.network)
+    return { invoice }
   }
 
   // Taproot signing is not yet in wasm — and must run where the seed is (the

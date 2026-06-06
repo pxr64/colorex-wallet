@@ -188,6 +188,14 @@ export async function receiveAddress(network = 'signet'): Promise<string | undef
   return wasm.derive_keychain10_address(descriptor, network)
 }
 
+/** Build a witness-vout RGB receive invoice for `amount` of `contractId`. */
+export async function createInvoice(contractId: string, amount: number, network = 'signet'): Promise<string> {
+  const descriptor = await getDescriptor()
+  if (!descriptor) throw new Error('no wallet — set one up first')
+  const s = await openStock()
+  return s.create_invoice(descriptor, contractId, BigInt(amount), network)
+}
+
 /** A keychain-0 BTC address — the wallet's funding address for a swap (the maker
  *  scans it for the taker's BTC inputs). */
 export async function fundingAddress(network = 'signet'): Promise<string | undefined> {
