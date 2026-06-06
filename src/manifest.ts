@@ -9,6 +9,10 @@ export default defineManifest({
   description:
     'RGB wallet for the Colorex exchange — self-custodial; keys and RGB state never leave your device.',
   action: { default_popup: 'index.html' },
+  // MV3 blocks WebAssembly by default; the RGB engine needs wasm-unsafe-eval.
+  content_security_policy: {
+    extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+  },
   background: { service_worker: 'src/worker/background.ts', type: 'module' },
   content_scripts: [
     {
