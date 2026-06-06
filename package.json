@@ -7,7 +7,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run build:wasm && tsc --noEmit && vite build",
+    "build:wasm": "cd rgb-wasm && wasm-pack build --target web",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview"
   },
