@@ -70,12 +70,22 @@ natively. **No fundamental RGB unknowns remain; the rest is assembly.**
 - RGB-Tools publishes **Node (SWIG/C++), Python, Swift (uniffi)** bindings — **no
   wasm target** anywhere.
 
-## The Bitcoin half is already solved
+## The Bitcoin half is wasm-able too — and we use `bp-wallet`, not BDK
 
-`@bitcoindevkit/bdk-wallet-node` comes from **`bitcoindevkit/bdk-wasm`**, which
-also ships `@bitcoindevkit/bdk-wallet-web` — "a descriptor-based wallet library in
-WebAssembly for browsers." So BDK (keys, descriptors, BTC UTXOs, PSBT signing) is
-browser-ready. The gap is the **RGB-specific** stack.
+`@bitcoindevkit/bdk-wallet-web` exists (BDK in wasm), **but we don't need it.**
+Spike result: **`bp-wallet` (=0.11.1-alpha.2, `default-features=false`, features
+`signers` + `client-side-validation`, i.e. no `fs`/`electrum`) compiles to wasm32**
+— `bpwallet`, `bpstd`, `descriptors`, `psbt`, `bp-core`, and `secp256k1` (the C
+lib) all build. Verified in `/private/tmp/bp-wallet-spike`.
+
+Decision: **bitcoin side = `bp-wallet` in wasm.** rgb-rfq's entire stack (incl.
+`rfq-rgb`'s `create_invoice` / swap-PSBT / accept) is built on `bp-wallet` + `bp-std`
++ `rgb-api` — and all three compile to wasm. So we **reuse rgb-rfq's taker logic
+nearly wholesale**, with bp-std types (`GraphSeal`, `Pay2Vout`, `RgbKeychain`,
+keychain-10 tapret descriptors) matching RGB natively — no BDK type-impedance, no
+rewrite. The only dropped pieces are bp-wallet's `fs` (wallet cache) and `electrum`
+(indexer), replaced on the JS edge by **IndexedDB persistence** + **Esplora `fetch`**
+(feed UTXO/tx data into the wasm wallet via a JS-backed resolver).
 
 ## Why a wasm build of rgb-lib is non-trivial (rgb-lib Cargo.toml)
 
@@ -137,16 +147,18 @@ an open question. Fastest path; do this regardless.
 blocking-reqwest indexer, and fs backup for wasm equivalents. Largest effort,
 highest risk (sea-orm-on-wasm). Not recommended given B2.
 
-**B2 — Lean: wasm RGB core + JS/TS shell (recommended for the extension).** The
-spike proves the RGB core compiles to wasm32. So compile *just the RGB protocol
-core* (`rgb-api` & friends) to wasm via `wasm-bindgen`, and build the peripheral
-layers in JS/TS where the browser is strong:
-- **storage** → IndexedDB/OPFS (our own persistence around the wasm core)
-- **indexer** → Esplora **HTTP `fetch`** (UTEXO already hosts one)
-- **bitcoin wallet / PSBT / keys** → **`@bitcoindevkit/bdk-wallet-web`** (already wasm)
+**B2 — Lean: rgb-rfq's stack in wasm + JS/TS edges (CHOSEN).** Both the RGB core
+(`rgb-api`) and the bitcoin wallet (`bp-wallet`/`bp-std`) compile to wasm32, so we
+compile rgb-rfq's taker stack via `wasm-bindgen` and build only the peripheral
+layers in JS/TS:
+- **bitcoin wallet / PSBT / keys / RGB engine** → **wasm** (`bp-wallet` + `rgb-api`,
+  reusing `rfq-rgb`'s `create_invoice`/swap/accept logic — same crates, native types)
+- **storage** → IndexedDB (serialize the wasm `Stock` + wallet to bytes; see RgbStock)
+- **indexer** → Esplora **HTTP `fetch`** on the JS edge (a JS-backed resolver feeds
+  UTXO/tx data into the wasm wallet, replacing the dropped `electrum` feature)
 - **RGB transport** → `fetch` to the hosted RGB proxy
-This sidesteps sea-orm entirely (the worst blocker) and reuses the proven-wasm
-RGB core. Real work, but each piece is browser-native and de-risked.
+This sidesteps sea-orm/SQLite and BDK type-impedance entirely, reuses the proven
+rgb-rfq logic, and every piece is now wasm-verified.
 
 **C — Hybrid interim ship (the handoff's documented fallback).** Run the native
 `@utexo/rgb-sdk` in a **server** (or a local native-messaging host); the extension
