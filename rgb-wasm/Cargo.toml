@@ -17,6 +17,9 @@ rgb-api = { version = "=0.11.1-rc.6", default-features = false, features = ["ser
 strict_encoding = "=2.8.2"
 # Confined<Vec<u8>> for the (de)serialize byte conversions.
 amplify = "4.8"
+# Bitcoin wallet (descriptors, address derivation, PSBT, signing) — no fs/electrum.
+bp-std = { version = "=0.11.1-alpha.2", default-features = false, features = ["client-side-validation", "serde", "signers"] }
+bp-wallet = { version = "=0.11.1-alpha.2", default-features = false, features = ["signers", "client-side-validation"] }
 # wasm randomness backend for the transitive getrandom 0.2 in the RGB tree.
 getrandom = { version = "0.2", features = ["js"] }
 

@@ -87,6 +87,19 @@ rewrite. The only dropped pieces are bp-wallet's `fs` (wallet cache) and `electr
 (indexer), replaced on the JS edge by **IndexedDB persistence** + **Esplora `fetch`**
 (feed UTXO/tx data into the wasm wallet via a JS-backed resolver).
 
+**Caveat — key generation stays in JS.** bp-wallet's `hot` feature (seed/at-rest
+key encryption) pulls **`aws-lc-sys`** (a C crypto lib) which does **not**
+cross-compile to wasm32. So enable only `signers` + `client-side-validation` (no
+`hot`): wasm does wallet construction, address derivation, and PSBT *signing*
+(given a key); **seed/xpub generation happens in JS** (`@scure/bip39`+`bip32`,
+pure-JS) and the descriptor is passed into wasm.
+
+**Verified running in wasm** (`derive_keychain10_address`): from the taker's real
+signet tapret descriptor (`[…/86h/1h/0h]tpub…/<0;1;10>/*`), `Wallet::new_layer1`
++ `next_address(RgbKeychain::Tapret)` derived `tb1pdjqr4c…3kgq74` — the exact
+witness-vout beneficiary `create_invoice` binds to. Bitcoin wallet + RGB engine
+both run in wasm; `create_invoice` is now an assembly step.
+
 ## Why a wasm build of rgb-lib is non-trivial (rgb-lib Cargo.toml)
 
 | Layer | Dependency | wasm32-unknown-unknown? |

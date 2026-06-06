@@ -13,8 +13,11 @@
 use std::str::FromStr;
 
 use amplify::confinement::Confined;
+use bpstd::{Network, XpubDerivable};
+use bpwallet::Wallet;
 use rgb::containers::{FileContent, Kit};
 use rgb::persistence::{MemIndex, MemStash, MemState, Stock};
+use rgb::{RgbDescr, RgbKeychain, TapretKey};
 use strict_encoding::{StrictDeserialize, StrictSerialize};
 use wasm_bindgen::prelude::*;
 
@@ -73,6 +76,30 @@ pub fn parse_invoice(invoice: &str) -> Result<String, JsError> {
     let parsed = rgb::invoice::RgbInvoice::from_str(invoice)
         .map_err(|e| JsError::new(&format!("invalid RGB invoice: {e:?}")))?;
     Ok(parsed.to_string())
+}
+
+/// Prove the bitcoin wallet runs in wasm: from a BIP-86 tapret descriptor
+/// (`<xpub>/<0;1;10>/*`, derived in JS via @scure/bip39+bip32), build an
+/// in-memory `bp-wallet` and derive a fresh keychain-10 (Tapret) receive address
+/// — the beneficiary a witness-vout `create_invoice` binds to. Key *generation*
+/// stays in JS (bp-wallet's `hot` key store pulls aws-lc, which isn't wasm-able);
+/// wasm does wallet construction, derivation, and (later) signing.
+#[wasm_bindgen]
+pub fn derive_keychain10_address(descriptor: &str, network: &str) -> Result<String, JsError> {
+    let net = match network.to_ascii_lowercase().as_str() {
+        "mainnet" | "bitcoin" => Network::Mainnet,
+        "signet" => Network::Signet,
+        "testnet" | "testnet3" => Network::Testnet3,
+        "testnet4" => Network::Testnet4,
+        "regtest" => Network::Regtest,
+        other => return Err(JsError::new(&format!("unknown network: {other}"))),
+    };
+    let xpub = XpubDerivable::from_str(descriptor)
+        .map_err(|e| JsError::new(&format!("parse descriptor: {e}")))?;
+    let rgb_descr: RgbDescr = TapretKey::from(xpub).into();
+    let mut wallet: Wallet<XpubDerivable, RgbDescr> = Wallet::new_layer1(rgb_descr, net);
+    let addr = wallet.next_address(RgbKeychain::Tapret, false);
+    Ok(addr.to_string())
 }
 
 // ---------------------------------------------------------------------------
