@@ -11,3 +11,6 @@ dist/
 rgb-wasm/target/
 rgb-wasm/pkg/
 rgb-wasm/pkg-node/
+
+# Internal design handoff — kept locally for reference, not published
+design_handoff_sign_tx/
