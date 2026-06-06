@@ -3,8 +3,9 @@
 // the SDK is hosted (in-worker WASM — Target C — vs a fallback transport), and
 // so signPsbt stays swappable for a hardware wallet later.
 //
-// Until the browser/WASM fork of @utexo/rgb-sdk lands (ROADMAP M1) this is
-// backed by StubWalletSdk. Then drop in the real adapter, unchanged callers.
+// Backed by StoreWalletSdk (the wasm-native bp-wallet + rgb-api wallet in
+// src/wallet/store.ts). Most methods are real; create_invoice (blind/witness
+// receive) and the taproot signPsbt are the remaining wasm pieces.
 
 import type { AssetId } from '../colorex/types'
 import type { SignInput } from '../types/sign-request'

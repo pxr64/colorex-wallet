@@ -9,7 +9,7 @@
 // marked TODO. The request registry, window opener, and message routing are real.
 
 import { assembleSignRequest } from '../colorex/sign-request'
-import { StubWalletSdk } from '../sdk/stub'
+import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
 import { decodePsbt } from '../wallet/store'
 import type { SignInput, SignRequest, SignResult } from '../types/sign-request'
@@ -17,9 +17,9 @@ import type { PopupRequest, PopupResponse, ProviderRequest, SignAndSendIntent } 
 
 // The wallet is a wallet-agnostic SIGNER. It does NOT talk to the Colorex broker —
 // the dApp orchestrates the swap (RFQ → accept) and hands us the maker's PSBT; we
-// decode it (trustless) + sign. Swap StubWalletSdk for the in-worker WASM adapter
-// once it lands (M1).
-const sdk: WalletSdk = new StubWalletSdk('signet')
+// decode it (trustless) + sign. Backed by the wasm-native wallet (store) — only
+// create_invoice + taproot signPsbt are still pending.
+const sdk: WalletSdk = new StoreWalletSdk('signet')
 
 interface Pending {
   request: SignRequest

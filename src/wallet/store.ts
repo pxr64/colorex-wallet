@@ -167,6 +167,16 @@ export async function receiveAddress(network = 'signet'): Promise<string | undef
   return wasm.derive_keychain10_address(descriptor, network)
 }
 
+/** A keychain-0 BTC address — the wallet's funding address for a swap (the maker
+ *  scans it for the taker's BTC inputs). */
+export async function fundingAddress(network = 'signet'): Promise<string | undefined> {
+  const descriptor = await getDescriptor()
+  if (!descriptor) return undefined
+  await rgbReady()
+  const addrs = JSON.parse(wasm.derive_addresses(descriptor, network, 0, 1)) as string[]
+  return addrs[0]
+}
+
 function b64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64.trim().replace(/\s+/g, ''))
   const out = new Uint8Array(bin.length)
