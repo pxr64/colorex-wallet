@@ -1,0 +1,49 @@
+// Taproot PSBT signing — in JS (the popup, where the unlocked seed lives), since
+// bp-wallet's signing path pulls aws-lc (not wasm-able). The wallet signs EXACTLY
+// the inputs it was told to (signInputs), each with the BIP-86 key for its
+// (keychain, addrIndex) — never auto-detecting. Derivation parity with the wasm
+// address derivation is verified. Returns the partially-signed PSBT (the maker
+// finalizes its own inputs + combines).
+
+import { HDKey } from '@scure/bip32'
+import { mnemonicToSeedSync } from '@scure/bip39'
+import * as btc from '@scure/btc-signer'
+import type { SignInput } from '../types/sign-request'
+
+// tprv/tpub version bytes (testnet/signet), matching keys.ts.
+const TESTNET_VERSIONS = { private: 0x04358394, public: 0x043587cf }
+
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64.trim().replace(/\s+/g, ''))
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
+function bytesToB64(bytes: Uint8Array): string {
+  let bin = ''
+  for (const b of bytes) bin += String.fromCharCode(b)
+  return btoa(bin)
+}
+
+/** Sign the given inputs of a maker's partial PSBT with the wallet's keys.
+ *  `signInputs` come from decode_psbt (index + keychain + addrIndex). */
+export function signPsbt(psbtB64: string, signInputs: SignInput[], mnemonic: string): string {
+  const account = HDKey.fromMasterSeed(mnemonicToSeedSync(mnemonic), TESTNET_VERSIONS).derive("m/86'/1'/0'")
+  const tx = btc.Transaction.fromPSBT(b64ToBytes(psbtB64), {
+    allowUnknownInputs: true,
+    allowUnknownOutputs: true,
+  })
+  for (const si of signInputs) {
+    const node = account.deriveChild(si.keychain).deriveChild(si.addrIndex)
+    if (!node.privateKey || !node.publicKey) {
+      throw new Error(`no key for ${si.keychain}/${si.addrIndex}`)
+    }
+    // The maker's PSBT omits our tap derivation, so tell the signer the key-path
+    // internal key (x-only) before signing; signIdx then does the BIP-86 tweak +
+    // key-path Schnorr sign. Finalize our input (the maker finalizes its own).
+    tx.updateInput(si.index, { tapInternalKey: node.publicKey.slice(1) })
+    tx.signIdx(node.privateKey, si.index)
+    tx.finalizeIdx(si.index)
+  }
+  return bytesToB64(tx.toPSBT())
+}

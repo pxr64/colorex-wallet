@@ -75,5 +75,6 @@ export function assembleSignRequest(p: AssembleParams): SignRequest {
     outputs,
     psbtBase64: p.psbtBase64,
     quoteId: p.quoteId,
+    signInputs: p.decoded.signInputs,
   }
 }

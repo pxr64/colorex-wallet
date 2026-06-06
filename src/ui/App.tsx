@@ -4,7 +4,7 @@ import { Lock } from './screens/Lock'
 import { Onboarding } from './screens/Onboarding'
 import { Home } from './screens/Home'
 import { SignScreen } from './screens/SignScreen'
-import { lock as lockWallet, walletExists } from '../wallet/store'
+import { isUnlocked, lock as lockWallet, walletExists } from '../wallet/store'
 
 type Route = 'lock' | 'onboarding' | 'home' | 'sign'
 
@@ -15,6 +15,9 @@ type Route = 'lock' | 'onboarding' | 'home' | 'sign'
 export function App() {
   const approvalId = new URLSearchParams(window.location.search).get('id')
   const [route, setRoute] = useState<Route | null>(null)
+  // The approval window is a fresh context — it must be unlocked here to sign
+  // (the seed is never shared from the main popup).
+  const [approvalUnlocked, setApprovalUnlocked] = useState(() => isUnlocked())
 
   useEffect(() => {
     void walletExists().then((exists) => setRoute(exists ? 'lock' : 'onboarding'))
@@ -27,7 +30,12 @@ export function App() {
     </div>
   )
 
-  if (approvalId) return shell(<SignScreen requestId={approvalId} />)
+  if (approvalId) {
+    if (!approvalUnlocked) {
+      return shell(<Lock onUnlock={() => setApprovalUnlocked(true)} onSetup={() => undefined} />)
+    }
+    return shell(<SignScreen requestId={approvalId} />)
+  }
 
   let screen: ReactNode
   switch (route) {

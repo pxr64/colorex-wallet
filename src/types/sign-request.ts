@@ -50,6 +50,9 @@ export interface SignRequest {
 
   // Colorex correlation for the /sign call.
   quoteId?: string
+
+  // Which inputs the approval window must sign + their derivations (from decode).
+  signInputs?: SignInput[]
 }
 
 export type SignResult =

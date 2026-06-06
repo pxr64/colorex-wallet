@@ -12,7 +12,7 @@ import { assembleSignRequest } from '../colorex/sign-request'
 import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
 import { decodePsbt } from '../wallet/store'
-import type { SignInput, SignRequest, SignResult } from '../types/sign-request'
+import type { SignRequest, SignResult } from '../types/sign-request'
 import type { PopupRequest, PopupResponse, ProviderRequest, SignAndSendIntent } from './messages'
 
 // The wallet is a wallet-agnostic SIGNER. It does NOT talk to the Colorex broker —
@@ -23,7 +23,6 @@ const sdk: WalletSdk = new StoreWalletSdk('signet')
 
 interface Pending {
   request: SignRequest
-  signInputs: SignInput[] // which inputs to sign + their derivations
   settle: (result: SignResult) => void
 }
 const pending = new Map<string, Pending>()
@@ -68,15 +67,15 @@ function handlePopup(msg: PopupRequest, sendResponse: (r: PopupResponse) => void
     return sendResponse(p ? { kind: 'signRequest', request: p.request } : { kind: 'notFound' })
   }
   // decide
-  void finalize(msg.id, msg.approve).then((result) => sendResponse({ kind: 'decided', result }))
+  void finalize(msg.id, msg.approve, msg.signedPsbt).then((result) => sendResponse({ kind: 'decided', result }))
 }
 
 // Build the verified SignRequest, open the approval window, and resolve when the
 // user decides. The promise the dApp awaits is settled via `pending`.
 async function signAndSend(id: string, intent: SignAndSendIntent): Promise<SignResult> {
-  const { request, signInputs } = await buildSignRequest(id, intent)
+  const request = await buildSignRequest(id, intent)
   return new Promise<SignResult>((resolve) => {
-    pending.set(id, { request, signInputs, settle: resolve })
+    pending.set(id, { request, settle: resolve })
     void openApprovalWindow(id)
   })
 }
@@ -86,10 +85,7 @@ async function signAndSend(id: string, intent: SignAndSendIntent): Promise<SignR
 // with nothing trusted from the dApp. The RGB receive invoice + BTC funding address
 // come from the wallet SDK (the in-wasm adapter, currently stubbed); the decode is
 // real (rgb-wasm decode_psbt, verified against a live maker PSBT).
-async function buildSignRequest(
-  id: string,
-  intent: SignAndSendIntent,
-): Promise<{ request: SignRequest; signInputs: SignInput[] }> {
+async function buildSignRequest(id: string, intent: SignAndSendIntent): Promise<SignRequest> {
   if (!intent.psbt) {
     throw new Error('signAndSend requires the maker PSBT (the dApp builds it via the broker)')
   }
@@ -111,7 +107,7 @@ async function buildSignRequest(
     }
   }
   const { connected = [] } = await chrome.storage.local.get('connected')
-  const request = assembleSignRequest({
+  return assembleSignRequest({
     id,
     origin: 'app.colorex.exchange',
     recognized: connected.includes('app.colorex.exchange'),
@@ -126,28 +122,20 @@ async function buildSignRequest(
     rgbAmountRaw: intent.amount ?? 0,
     side: intent.side ?? 'buy',
   })
-  return { request, signInputs: decoded.signInputs }
 }
 
-// On approve → sign our PSBT inputs and return the signed PSBT. The dApp submits
-// it to the broker (the maker finalizes + broadcasts), then hands us the final
-// consignment via acceptConsignment. On reject → user_rejected.
-async function finalize(id: string, approve: boolean): Promise<SignResult> {
+// The approval window signs locally (it holds the unlocked seed) and hands back
+// the signed PSBT; we resolve the dApp's promise with it (the dApp submits to the
+// broker → the maker finalizes + broadcasts). On reject → user_rejected.
+async function finalize(id: string, approve: boolean, signedPsbt?: string): Promise<SignResult> {
   const p = pending.get(id)
   if (!p) return { ok: false, error: 'sign_failed', message: 'unknown request' }
   pending.delete(id)
-  if (!approve) {
-    const rejected: SignResult = { ok: false, error: 'user_rejected' }
-    p.settle(rejected)
-    return rejected
-  }
-  let result: SignResult
-  try {
-    const signedPsbt = await sdk.signPsbt(p.request.psbtBase64, p.signInputs)
-    result = { ok: true, signedPsbt }
-  } catch (e) {
-    result = { ok: false, error: 'sign_failed', message: (e as Error).message }
-  }
+  const result: SignResult = !approve
+    ? { ok: false, error: 'user_rejected' }
+    : signedPsbt
+      ? { ok: true, signedPsbt }
+      : { ok: false, error: 'sign_failed', message: 'no signature from approval window' }
   p.settle(result)
   return result
 }

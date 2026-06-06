@@ -34,7 +34,7 @@ export type ProviderResponse =
 /** popup ↔ worker */
 export type PopupRequest =
   | { kind: 'getSignRequest'; id: string }
-  | { kind: 'decide'; id: string; approve: boolean }
+  | { kind: 'decide'; id: string; approve: boolean; signedPsbt?: string }
 
 export type PopupResponse =
   | { kind: 'signRequest'; request: SignRequest }
