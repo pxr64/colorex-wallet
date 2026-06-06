@@ -18,6 +18,18 @@ export async function txStatus(txid: string, base: string = ESPLORA_SIGNET): Pro
   return (await res.json()) as TxStatus
 }
 
+export interface Utxo {
+  txid: string
+  vout: number
+}
+
+/** GET /address/:addr/utxo — the wallet's UTXOs at an address. */
+export async function addressUtxos(addr: string, base: string = ESPLORA_SIGNET): Promise<Utxo[]> {
+  const res = await fetch(`${base}/address/${addr}/utxo`)
+  if (!res.ok) throw new Error(`esplora /address/${addr}/utxo → ${res.status}`)
+  return (await res.json()) as Utxo[]
+}
+
 /** The witness-ord entries `RgbStock.accept_consignment` expects, for `txids`. */
 export async function witnessOrds(
   txids: string[],

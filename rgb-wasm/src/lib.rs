@@ -15,7 +15,7 @@ use std::num::NonZeroU32;
 use std::str::FromStr;
 
 use amplify::confinement::Confined;
-use bpstd::{Network, Txid, XpubDerivable};
+use bpstd::{Keychain, Network, Txid, XpubDerivable};
 use bpwallet::Wallet;
 use rgb::containers::{ConsignmentExt, FileContent, Kit, Transfer, ValidConsignment};
 use rgb::contract::FilterIncludeAll;
@@ -94,20 +94,29 @@ pub fn parse_invoice(invoice: &str) -> Result<String, JsError> {
 /// wasm does wallet construction, derivation, and (later) signing.
 #[wasm_bindgen]
 pub fn derive_keychain10_address(descriptor: &str, network: &str) -> Result<String, JsError> {
-    let net = match network.to_ascii_lowercase().as_str() {
-        "mainnet" | "bitcoin" => Network::Mainnet,
-        "signet" => Network::Signet,
-        "testnet" | "testnet3" => Network::Testnet3,
-        "testnet4" => Network::Testnet4,
-        "regtest" => Network::Regtest,
-        other => return Err(JsError::new(&format!("unknown network: {other}"))),
-    };
     let xpub = XpubDerivable::from_str(descriptor)
         .map_err(|e| JsError::new(&format!("parse descriptor: {e}")))?;
     let rgb_descr: RgbDescr = TapretKey::from(xpub).into();
-    let mut wallet: Wallet<XpubDerivable, RgbDescr> = Wallet::new_layer1(rgb_descr, net);
+    let mut wallet: Wallet<XpubDerivable, RgbDescr> = Wallet::new_layer1(rgb_descr, btc_network(network)?);
     let addr = wallet.next_address(RgbKeychain::Tapret, false);
     Ok(addr.to_string())
+}
+
+/// Derive the first `count` addresses of a keychain (0 = receive, 1 = change,
+/// 10 = tapret RGB anchors), as a JSON array. The caller scans these on Esplora
+/// to learn which UTXOs (hence which RGB allocations) the wallet owns.
+#[wasm_bindgen]
+pub fn derive_addresses(descriptor: &str, network: &str, keychain: u8, count: u32) -> Result<String, JsError> {
+    let xpub = XpubDerivable::from_str(descriptor)
+        .map_err(|e| JsError::new(&format!("parse descriptor: {e}")))?;
+    let rgb_descr: RgbDescr = TapretKey::from(xpub).into();
+    let wallet: Wallet<XpubDerivable, RgbDescr> = Wallet::new_layer1(rgb_descr, btc_network(network)?);
+    let addrs: Vec<String> = wallet
+        .addresses(Keychain::from(keychain))
+        .take(count as usize)
+        .map(|d| d.addr.to_string())
+        .collect();
+    Ok(serde_json::Value::Array(addrs.into_iter().map(serde_json::Value::String).collect()).to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -194,41 +203,16 @@ impl RgbStock {
     /// allocations the stock has seen (refined to wallet-owned UTXOs once the
     /// indexer lands). Empty for a fresh wallet.
     pub fn list_assets(&self) -> Result<String, JsError> {
-        let contracts: Vec<_> = self
-            .stock
-            .contracts()
-            .map_err(|e| JsError::new(&format!("contracts: {e}")))?
-            .collect();
-        let mut out = Vec::with_capacity(contracts.len());
-        for info in contracts {
-            let cid = info.id;
-            let contract = self
-                .stock
-                .contract_data(cid)
-                .map_err(|e| JsError::new(&format!("contract_data: {e}")))?;
-            let (ticker, precision) = match contract.global("spec").next() {
-                Some(v) => {
-                    let spec = AssetSpec::from_strict_val_unchecked(&v);
-                    (spec.ticker().to_owned(), spec.precision.decimals())
-                }
-                None => (cid.to_string(), 0u8),
-            };
-            let mut balance: u64 = 0;
-            for details in contract.schema.owned_types.values() {
-                if let Ok(allocs) = contract.fungible(details.name.clone(), &FilterIncludeAll) {
-                    for alloc in allocs {
-                        balance = balance.saturating_add(alloc.state.value());
-                    }
-                }
-            }
-            out.push(serde_json::json!({
-                "contractId": cid.to_string(),
-                "ticker": ticker,
-                "precision": precision,
-                "balance": balance,
-            }));
-        }
-        Ok(serde_json::Value::Array(out).to_string())
+        self.collect_assets(None)
+    }
+
+    /// Like `list_assets` but counts only allocations on `owned` outpoints
+    /// (`["txid:vout", …]`, the wallet's UTXOs fetched from Esplora). A contract
+    /// with no owned allocations still appears (balance 0).
+    pub fn list_assets_owned(&self, owned_json: &str) -> Result<String, JsError> {
+        let owned: std::collections::HashSet<String> =
+            serde_json::from_str(owned_json).map_err(|e| JsError::new(&format!("parse owned: {e}")))?;
+        self.collect_assets(Some(&owned))
     }
 
     /// The witness txids a consignment references, as a JSON array of hex strings.
@@ -303,6 +287,64 @@ impl RgbStock {
             .map_err(|e| JsError::new(&format!("update_witnesses: {e}")))?;
         Ok(())
     }
+}
+
+// Non-exported helpers + the per-asset aggregation.
+impl RgbStock {
+    fn collect_assets(&self, owned: Option<&std::collections::HashSet<String>>) -> Result<String, JsError> {
+        let contracts: Vec<_> = self
+            .stock
+            .contracts()
+            .map_err(|e| JsError::new(&format!("contracts: {e}")))?
+            .collect();
+        let mut out = Vec::with_capacity(contracts.len());
+        for info in contracts {
+            let cid = info.id;
+            let contract = self
+                .stock
+                .contract_data(cid)
+                .map_err(|e| JsError::new(&format!("contract_data: {e}")))?;
+            let (ticker, precision) = match contract.global("spec").next() {
+                Some(v) => {
+                    let spec = AssetSpec::from_strict_val_unchecked(&v);
+                    (spec.ticker().to_owned(), spec.precision.decimals())
+                }
+                None => (cid.to_string(), 0u8),
+            };
+            let mut balance: u64 = 0;
+            for details in contract.schema.owned_types.values() {
+                if let Ok(allocs) = contract.fungible(details.name.clone(), &FilterIncludeAll) {
+                    for alloc in allocs {
+                        let include = match owned {
+                            Some(set) => set.contains(&alloc.seal.to_outpoint().to_string()),
+                            None => true,
+                        };
+                        if include {
+                            balance = balance.saturating_add(alloc.state.value());
+                        }
+                    }
+                }
+            }
+            out.push(serde_json::json!({
+                "contractId": cid.to_string(),
+                "ticker": ticker,
+                "precision": precision,
+                "balance": balance,
+            }));
+        }
+        Ok(serde_json::Value::Array(out).to_string())
+    }
+}
+
+fn btc_network(network: &str) -> Result<Network, JsError> {
+    Ok(match network.to_ascii_lowercase().as_str() {
+        "mainnet" | "bitcoin" => Network::Mainnet,
+        "signet" => Network::Signet,
+        "testnet" | "testnet3" => Network::Testnet3,
+        "testnet4" => Network::Testnet4,
+        "regtest" => Network::Regtest,
+        other => return Err(JsError::new(&format!("unknown network: {other}"))),
+    })
 }
 
 fn chain_net(network: &str) -> Result<ChainNet, JsError> {

@@ -6,7 +6,7 @@
 import { rgbReady, wasm } from './rgb'
 import { generateWallet, type GeneratedWallet } from './keys'
 import { decryptSeed, encryptSeed, type Vault } from './vault'
-import { witnessOrds } from './esplora'
+import { addressUtxos, witnessOrds } from './esplora'
 
 export interface Asset {
   contractId: string
@@ -117,10 +117,30 @@ export async function persist(): Promise<void> {
   await kvPutAll({ stash: snap.stash, state: snap.state, index: snap.index })
 }
 
-/** Every asset the wallet holds (dynamic, from the stock). */
+// The wallet's own outpoints (`txid:vout`), by scanning its derived addresses on
+// Esplora — used to filter RGB allocations down to what we actually hold.
+async function ownedOutpoints(network = 'signet'): Promise<string[]> {
+  const descriptor = await getDescriptor()
+  if (!descriptor) return []
+  await rgbReady()
+  const addrs: string[] = []
+  for (const keychain of [0, 1, 10]) {
+    addrs.push(...(JSON.parse(wasm.derive_addresses(descriptor, network, keychain, 20)) as string[]))
+  }
+  const lists = await Promise.all(addrs.map((a) => addressUtxos(a).catch(() => [])))
+  return lists.flat().map((u) => `${u.txid}:${u.vout}`)
+}
+
+/** Every asset the wallet holds, with balances filtered to wallet-owned UTXOs.
+ *  Falls back to the unfiltered sum if the Esplora scan fails. */
 export async function listAssets(): Promise<Asset[]> {
   const s = await openStock()
-  return JSON.parse(s.list_assets()) as Asset[]
+  try {
+    const owned = await ownedOutpoints()
+    return JSON.parse(s.list_assets_owned(JSON.stringify(owned))) as Asset[]
+  } catch {
+    return JSON.parse(s.list_assets()) as Asset[]
+  }
 }
 
 /** Create a fresh wallet: generate keys (JS), encrypt the seed under `password`,
