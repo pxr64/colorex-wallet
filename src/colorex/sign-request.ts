@@ -3,7 +3,7 @@
 // RGB amount the wallet asked for, validated later on consignment-accept). Every
 // number here is wallet-derived; nothing is taken from the dApp.
 
-import type { BalanceDelta, PsbtLeg, SignRequest } from '../types/sign-request'
+import type { BalanceDelta, PsbtLeg, SignInput, SignRequest } from '../types/sign-request'
 
 export interface DecodedPsbt {
   feeSats: number
@@ -12,8 +12,12 @@ export interface DecodedPsbt {
   btcOutOursSats: number
   totalInSats: number
   totalOutSats: number
-  inputs: Array<{ outpoint: string; valueSats: number; ours: boolean }>
+  inputs: Array<{ outpoint: string; valueSats: number; ours: boolean; keychain?: number; index?: number }>
   outputs: Array<{ valueSats: number; ours: boolean }>
+  // Explicit instructions for the signer: sign psbt input `index` with the key at
+  // (keychain, addrIndex). Derived by matching each input's prev scriptPubkey to a
+  // wallet address — not from PSBT-embedded derivation (which the maker may omit).
+  signInputs: SignInput[]
 }
 
 export interface AssembleParams {

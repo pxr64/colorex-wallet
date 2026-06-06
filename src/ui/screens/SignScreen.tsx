@@ -139,7 +139,7 @@ export function SignScreen({ requestId, onClose }: { requestId: string; onClose?
       outflows[0] && inflows[0]
         ? `${fmt(Math.abs(outflows[0].delta), outflows[0].sym)} ${outflows[0].sym} → ${fmt(inflows[0].delta, inflows[0].sym)} ${inflows[0].sym}`
         : '—'
-    const txid = result?.ok ? result.txid : isMock ? 'c2e1…7af2:0' : '—'
+    const txid = result?.ok ? (result.txid ?? 'signed — dApp will broadcast') : isMock ? 'c2e1…7af2:0' : '—'
     const cons = (result?.ok && result.consignment) || req.consignment || (isMock ? 'cons:8b…d4' : '—')
     const artifacts: [string, string][] = [
       ['Signed', summary],

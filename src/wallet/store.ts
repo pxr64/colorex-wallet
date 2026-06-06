@@ -174,16 +174,21 @@ function b64ToBytes(b64: string): Uint8Array {
   return out
 }
 
-// The wallet's derived addresses across the keychains RGB swaps touch.
-async function ownedAddresses(network = 'signet'): Promise<string[]> {
+// The wallet's derived addresses across the keychains RGB swaps touch, each
+// tagged with its (keychain, index) so the decoder can tell the signer exactly
+// which input to sign with which key.
+async function ownedAddresses(
+  network = 'signet',
+): Promise<Array<{ address: string; keychain: number; index: number }>> {
   const descriptor = await getDescriptor()
   if (!descriptor) return []
   await rgbReady()
-  const addrs: string[] = []
+  const tagged: Array<{ address: string; keychain: number; index: number }> = []
   for (const keychain of [0, 1, 10]) {
-    addrs.push(...(JSON.parse(wasm.derive_addresses(descriptor, network, keychain, 20)) as string[]))
+    const addrs = JSON.parse(wasm.derive_addresses(descriptor, network, keychain, 20)) as string[]
+    addrs.forEach((address, index) => tagged.push({ address, keychain, index }))
   }
-  return addrs
+  return tagged
 }
 
 /** Decode a maker's partial PSBT into the wallet's BTC side (which inputs/outputs

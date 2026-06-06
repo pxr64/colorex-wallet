@@ -16,7 +16,7 @@ use std::str::FromStr;
 
 use amplify::confinement::Confined;
 use bpstd::psbt::Psbt;
-use bpstd::{Address, Keychain, Network, Txid, XpubDerivable};
+use bpstd::{Address, Keychain, Network, ScriptPubkey, Txid, XpubDerivable};
 use bpwallet::Wallet;
 use rgb::containers::{ConsignmentExt, FileContent, Kit, Transfer, ValidConsignment};
 use rgb::contract::FilterIncludeAll;
@@ -136,28 +136,49 @@ pub fn decode_psbt(
     let psbt = Psbt::deserialize(psbt_bytes).map_err(|e| JsError::new(&format!("parse psbt: {e}")))?;
     let owned_ops: HashSet<String> = serde_json::from_str(owned_outpoints_json)
         .map_err(|e| JsError::new(&format!("parse outpoints: {e}")))?;
-    let owned_addrs: Vec<String> = serde_json::from_str(owned_addresses_json)
+
+    // Owned addresses tagged with their derivation: `[{ address, keychain, index }]`.
+    // The derivation is what lets the signer sign the right input with the right
+    // key — a generic signer can't auto-detect this when the maker's PSBT carries
+    // no bip32/tap derivation on our inputs.
+    let owned_val: serde_json::Value = serde_json::from_str(owned_addresses_json)
         .map_err(|e| JsError::new(&format!("parse addresses: {e}")))?;
-    let owned_spks: Vec<_> = owned_addrs
-        .iter()
-        .filter_map(|a| Address::from_str(a).ok().map(|ad| ad.script_pubkey()))
-        .collect();
+    let mut owned_spks: Vec<(ScriptPubkey, u32, u32)> = Vec::new();
+    if let Some(arr) = owned_val.as_array() {
+        for e in arr {
+            let Some(a) = e.get("address").and_then(|v| v.as_str()) else { continue };
+            let kc = e.get("keychain").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let idx = e.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            if let Ok(ad) = Address::from_str(a) {
+                owned_spks.push((ad.script_pubkey(), kc, idx));
+            }
+        }
+    }
 
     let mut inputs = Vec::new();
+    let mut sign_inputs = Vec::new();
     let mut total_in: u64 = 0;
     let mut in_ours: u64 = 0;
-    for inp in psbt.inputs() {
+    for (pos, inp) in psbt.inputs().enumerate() {
         let op = inp.previous_outpoint.to_string();
         let val = inp.value().sats();
-        // Ours if we hold the UTXO (by outpoint) or it spends one of our
-        // addresses (by the input's prev scriptPubkey).
-        let ours = owned_ops.contains(&op)
-            || owned_spks.iter().any(|s| *s == inp.prev_txout().script_pubkey);
+        let spk = inp.prev_txout().script_pubkey.clone();
+        // Match by the input's prev scriptPubkey → the address's derivation.
+        let deriv = owned_spks.iter().find(|(s, _, _)| *s == spk).map(|(_, kc, idx)| (*kc, *idx));
+        let ours = owned_ops.contains(&op) || deriv.is_some();
         total_in = total_in.saturating_add(val);
         if ours {
             in_ours = in_ours.saturating_add(val);
         }
-        inputs.push(serde_json::json!({ "outpoint": op, "valueSats": val, "ours": ours }));
+        let mut entry = serde_json::json!({ "outpoint": op, "valueSats": val, "ours": ours });
+        if let Some((kc, idx)) = deriv {
+            entry["keychain"] = serde_json::json!(kc);
+            entry["index"] = serde_json::json!(idx);
+            // Explicit instruction for the signer: sign THIS input index with the
+            // key at (keychain, addrIndex). No reliance on PSBT-embedded derivation.
+            sign_inputs.push(serde_json::json!({ "index": pos, "keychain": kc, "addrIndex": idx }));
+        }
+        inputs.push(entry);
     }
 
     let mut outputs = Vec::new();
@@ -165,7 +186,7 @@ pub fn decode_psbt(
     let mut out_ours: u64 = 0;
     for out in psbt.outputs() {
         let val = out.amount.sats();
-        let ours = owned_spks.iter().any(|s| *s == out.script);
+        let ours = owned_spks.iter().any(|(s, _, _)| *s == out.script);
         total_out = total_out.saturating_add(val);
         if ours {
             out_ours = out_ours.saturating_add(val);
@@ -184,6 +205,7 @@ pub fn decode_psbt(
         "totalOutSats": total_out,
         "inputs": inputs,
         "outputs": outputs,
+        "signInputs": sign_inputs,
     })
     .to_string())
 }

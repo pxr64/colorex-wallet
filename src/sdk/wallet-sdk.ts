@@ -7,6 +7,7 @@
 // backed by StubWalletSdk. Then drop in the real adapter, unchanged callers.
 
 import type { AssetId } from '../colorex/types'
+import type { SignInput } from '../types/sign-request'
 
 export interface AssetBalance {
   assetId: string
@@ -38,8 +39,9 @@ export interface WalletSdk {
 
   // --- the three swap touchpoints (see docs/swap-flow.md) ---
   // 1. created via blind/witnessReceive above (taker's RGB receive invoice)
-  // 2. sign the maker-built PSBT:
-  signPsbt(psbtBase64: string): Promise<string>
+  // 2. sign the maker-built PSBT — signing EXACTLY the inputs the wallet was told
+  //    to (with their derivations), never auto-detecting from the PSBT:
+  signPsbt(psbtBase64: string, signInputs: SignInput[]): Promise<string>
   // 3. absorb the maker's consignment into the on-device stash:
   acceptConsignment(consignment: string): Promise<void>
 

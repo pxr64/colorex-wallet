@@ -4,13 +4,19 @@
 
 import type { SignRequest, SignResult } from '../types/sign-request'
 
-/** dApp-supplied INTENT. NEVER trusted for display — the worker independently
- *  builds + decodes the PSBT to compute what the user actually signs. */
+/** dApp-supplied sign request. The dApp orchestrates the swap (broker round-trip)
+ *  and hands the wallet the maker's PSBT; the wallet is a wallet-agnostic SIGNER —
+ *  it independently DECODES the PSBT to compute what the user actually signs and
+ *  never trusts the dApp's amounts for the BTC side. `assetId`/`amount` are RGB
+ *  display hints, validated only on consignment-accept. */
 export interface SignAndSendIntent {
-  invoice?: string
+  psbt: string // maker's partial PSBT (base64), built by the dApp via the broker
   assetId?: string
   amount?: number
   side?: 'buy' | 'sell'
+  quoteId?: string
+  makerId?: string
+  consignment?: string
 }
 
 /** page → worker (relayed by the content script) */

@@ -5,6 +5,15 @@
 
 export type AssetSym = string // 'USDT-RGB', 'RGBX', 'tBTC', …
 
+/** Which PSBT input the wallet must sign + the key derivation to sign it with.
+ *  The wallet tells the signer explicitly — it does not rely on the maker's PSBT
+ *  carrying our bip32/tap derivation. */
+export interface SignInput {
+  index: number // PSBT input index
+  keychain: number // 0 receive · 1 change · 10 tapret
+  addrIndex: number // derivation index within the keychain
+}
+
 export interface BalanceDelta {
   sym: AssetSym
   delta: number // signed: negative = outflow, positive = inflow
@@ -44,7 +53,10 @@ export interface SignRequest {
 }
 
 export type SignResult =
-  | { ok: true; txid: string; consignment?: string }
+  // The wallet signs and returns the signed PSBT; the dApp submits it to the
+  // broker (the maker finalizes + broadcasts). txid is filled in only if the
+  // wallet later learns it.
+  | { ok: true; signedPsbt: string; txid?: string; consignment?: string }
   | {
       ok: false
       error: 'user_rejected' | 'sign_failed' | 'broadcast_failed'
