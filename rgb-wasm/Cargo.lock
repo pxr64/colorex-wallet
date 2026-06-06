@@ -1029,6 +1029,7 @@ dependencies = [
 name = "rgb-wasm"
 version = "0.0.0"
 dependencies = [
+ "amplify",
  "getrandom 0.2.17",
  "rgb-api",
  "serde_json",

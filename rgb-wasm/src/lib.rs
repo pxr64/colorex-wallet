@@ -4,13 +4,15 @@
 //! in the extension's service worker via this module, while keys/PSBT (bdk-wasm),
 //! storage (IndexedDB), and the indexer/transport (`fetch`) live in JS/TS.
 //!
-//! The persistence model: the RGB `Stock` lives in wasm memory on the in-memory
-//! providers; durability is JS's job — wasm hands the strict-serialized provider
-//! bytes to JS, which stores/loads them in IndexedDB (mirroring how `FsBinStore`
-//! reads/writes those same providers as files natively).
+//! Persistence model: the RGB `Stock` lives in wasm memory on the in-memory
+//! providers (`MemStash`/`MemState`/`MemIndex`); durability is JS's job. `save()`
+//! hands the strict-serialized provider bytes to JS to store in IndexedDB;
+//! `load(...)` rebuilds the `Stock` from those bytes — mirroring how `FsBinStore`
+//! reads/writes the same providers as files natively.
 
 use std::str::FromStr;
 
+use amplify::confinement::Confined;
 use rgb::containers::{FileContent, Kit};
 use rgb::persistence::{MemIndex, MemStash, MemState, Stock};
 use strict_encoding::{StrictDeserialize, StrictSerialize};
@@ -22,6 +24,36 @@ const NIA_SCHEMA_KIT: &[u8] = include_bytes!("../schemas/NonInflatableAsset.rgb"
 
 // Strict-encoding size bound (u32::MAX), matching the native FsBinStore.
 const MAX: usize = u32::MAX as usize;
+
+type WalletStock = Stock<MemStash, MemState, MemIndex>;
+
+fn import_nia(stock: &mut WalletStock) -> Result<(), JsError> {
+    let kit = Kit::load(&mut &NIA_SCHEMA_KIT[..])
+        .map_err(|e| JsError::new(&format!("load NIA kit: {e}")))?
+        .validate()
+        .map_err(|e| JsError::new(&format!("validate NIA kit: {e:?}")))?;
+    stock
+        .import_kit(kit)
+        .map_err(|e| JsError::new(&format!("import NIA kit: {e}")))?;
+    Ok(())
+}
+
+fn ser<T: StrictSerialize>(provider: &T) -> Result<Vec<u8>, JsError> {
+    Ok(provider
+        .to_strict_serialized::<MAX>()
+        .map_err(|e| JsError::new(&format!("serialize: {e}")))?
+        .release())
+}
+
+fn de<T: StrictDeserialize>(bytes: &[u8]) -> Result<T, JsError> {
+    let confined = Confined::<Vec<u8>, 0, MAX>::try_from(bytes.to_vec())
+        .map_err(|e| JsError::new(&format!("confine: {e}")))?;
+    T::from_strict_serialized::<MAX>(confined).map_err(|e| JsError::new(&format!("deserialize: {e}")))
+}
+
+// ---------------------------------------------------------------------------
+// Stateless helpers (smoke tests / pure ops)
+// ---------------------------------------------------------------------------
 
 /// Library version marker — a trivial call to confirm the module loaded.
 #[wasm_bindgen]
@@ -35,9 +67,7 @@ pub fn is_valid_contract_id(id: &str) -> bool {
     rgb::ContractId::from_str(id).is_ok()
 }
 
-/// Parse an RGB invoice and return its normalized (round-tripped) string. Proves
-/// the RGB invoice parser runs in wasm — a real wallet operation. Errors on
-/// malformed input.
+/// Parse an RGB invoice and return its normalized (round-tripped) string.
 #[wasm_bindgen]
 pub fn parse_invoice(invoice: &str) -> Result<String, JsError> {
     let parsed = rgb::invoice::RgbInvoice::from_str(invoice)
@@ -45,58 +75,82 @@ pub fn parse_invoice(invoice: &str) -> Result<String, JsError> {
     Ok(parsed.to_string())
 }
 
-/// THE persistence proof: build a fresh in-memory `Stock`, import the NIA schema
-/// (a real stateful mutation), strict-serialize the three providers to bytes
-/// (what would go to IndexedDB), reconstruct a `Stock` from those bytes, and
-/// re-query — confirming stateful RGB survives a serialize → deserialize round
-/// trip in wasm. Returns a human-readable summary.
+// ---------------------------------------------------------------------------
+// The persistence spine: a Stock handle JS owns, with bytes in/out
+// ---------------------------------------------------------------------------
+
+/// The three serialized provider blobs to persist to IndexedDB.
 #[wasm_bindgen]
-pub fn demo_stock_persistence() -> Result<String, JsError> {
-    // 1. fresh stock + import the NIA schema.
-    let mut stock = Stock::in_memory();
-    let kit = Kit::load(&mut &NIA_SCHEMA_KIT[..])
-        .map_err(|e| JsError::new(&format!("load kit: {e}")))?
-        .validate()
-        .map_err(|e| JsError::new(&format!("validate kit: {e:?}")))?;
-    stock
-        .import_kit(kit)
-        .map_err(|e| JsError::new(&format!("import kit: {e}")))?;
-    let before = stock
-        .schemata()
-        .map_err(|e| JsError::new(&format!("schemata: {e}")))?
-        .count();
+pub struct StockSnapshot {
+    stash: Vec<u8>,
+    state: Vec<u8>,
+    index: Vec<u8>,
+}
 
-    // 2. serialize the three providers to bytes (→ IndexedDB, in production).
-    let stash_b = stock
-        .as_stash_provider()
-        .to_strict_serialized::<MAX>()
-        .map_err(|e| JsError::new(&format!("ser stash: {e}")))?;
-    let state_b = stock
-        .as_state_provider()
-        .to_strict_serialized::<MAX>()
-        .map_err(|e| JsError::new(&format!("ser state: {e}")))?;
-    let index_b = stock
-        .as_index_provider()
-        .to_strict_serialized::<MAX>()
-        .map_err(|e| JsError::new(&format!("ser index: {e}")))?;
+#[wasm_bindgen]
+impl StockSnapshot {
+    #[wasm_bindgen(getter)]
+    pub fn stash(&self) -> Vec<u8> {
+        self.stash.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn state(&self) -> Vec<u8> {
+        self.state.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn index(&self) -> Vec<u8> {
+        self.index.clone()
+    }
+}
 
-    // 3. reconstruct from those bytes (← IndexedDB, in production) and re-query.
-    let stash = MemStash::from_strict_serialized::<MAX>(stash_b.clone())
-        .map_err(|e| JsError::new(&format!("de stash: {e}")))?;
-    let state = MemState::from_strict_serialized::<MAX>(state_b.clone())
-        .map_err(|e| JsError::new(&format!("de state: {e}")))?;
-    let index = MemIndex::from_strict_serialized::<MAX>(index_b.clone())
-        .map_err(|e| JsError::new(&format!("de index: {e}")))?;
-    let reloaded = Stock::with(stash, state, index);
-    let after = reloaded
-        .schemata()
-        .map_err(|e| JsError::new(&format!("schemata (reloaded): {e}")))?
-        .count();
+/// An RGB `Stock` owned by JS. JS holds one of these per wallet, calls `save()`
+/// after mutations to persist to IndexedDB, and `load()` on startup.
+#[wasm_bindgen]
+pub struct RgbStock {
+    stock: WalletStock,
+}
 
-    Ok(format!(
-        "schemata before={before}, after_reload={after}; serialized bytes stash={} state={} index={}",
-        stash_b.len(),
-        state_b.len(),
-        index_b.len()
-    ))
+#[wasm_bindgen]
+impl RgbStock {
+    /// Fresh wallet stock with the NIA schema imported — first-run.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Result<RgbStock, JsError> {
+        let mut stock = Stock::in_memory();
+        import_nia(&mut stock)?;
+        Ok(RgbStock { stock })
+    }
+
+    /// Restore a stock from previously-saved IndexedDB bytes (the three blobs
+    /// from [`RgbStock::save`]).
+    pub fn load(stash: &[u8], state: &[u8], index: &[u8]) -> Result<RgbStock, JsError> {
+        let stock = Stock::with(de(stash)?, de(state)?, de(index)?);
+        Ok(RgbStock { stock })
+    }
+
+    /// Serialize the stock for persistence to IndexedDB.
+    pub fn save(&self) -> Result<StockSnapshot, JsError> {
+        Ok(StockSnapshot {
+            stash: ser(self.stock.as_stash_provider())?,
+            state: ser(self.stock.as_state_provider())?,
+            index: ser(self.stock.as_index_provider())?,
+        })
+    }
+
+    /// Number of schemata known (≥1 after `new()`). A read op to verify state.
+    pub fn schema_count(&self) -> Result<u32, JsError> {
+        Ok(self
+            .stock
+            .schemata()
+            .map_err(|e| JsError::new(&format!("schemata: {e}")))?
+            .count() as u32)
+    }
+
+    /// Number of contracts (assets) the stock tracks.
+    pub fn contract_count(&self) -> Result<u32, JsError> {
+        Ok(self
+            .stock
+            .contracts()
+            .map_err(|e| JsError::new(&format!("contracts: {e}")))?
+            .count() as u32)
+    }
 }

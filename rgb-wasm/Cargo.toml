@@ -15,6 +15,8 @@ serde_json = "1"
 rgb-api = { version = "=0.11.1-rc.6", default-features = false, features = ["serde"] }
 # Strict (de)serialization of the in-memory Stock providers → bytes for IndexedDB.
 strict_encoding = "=2.8.2"
+# Confined<Vec<u8>> for the (de)serialize byte conversions.
+amplify = "4.8"
 # wasm randomness backend for the transitive getrandom 0.2 in the RGB tree.
 getrandom = { version = "0.2", features = ["js"] }
 
