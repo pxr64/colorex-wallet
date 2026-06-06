@@ -1,0 +1,29 @@
+{
+  "name": "colorex-wallet",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Colorex RGB wallet — MV3 browser extension (taker wallet for the Colorex RFQ exchange).",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.26",
+    "@types/chrome": "^0.0.270",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.0"
+  },
+  "comment": "@utexo/rgb-sdk is NOT listed yet: the published package is Node-only. The browser/WASM fork is the project's first milestone (see ROADMAP.md M1). Code targets the WalletSdk interface in src/sdk and runs against a stub until the fork lands."
+}
