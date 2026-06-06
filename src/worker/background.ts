@@ -9,8 +9,10 @@
 // marked TODO. The request registry, window opener, and message routing are real.
 
 import { ColorexClient } from '../colorex/client'
+import { assembleSignRequest } from '../colorex/sign-request'
 import { StubWalletSdk } from '../sdk/stub'
-import type { WalletSdk } from '../sdk/wallet-sdk'
+import { type WalletSdk, toBrokerNetwork } from '../sdk/wallet-sdk'
+import { decodePsbt } from '../wallet/store'
 import type { SignRequest, SignResult } from '../types/sign-request'
 import type { PopupRequest, PopupResponse, ProviderRequest, SignAndSendIntent } from './messages'
 
@@ -75,23 +77,89 @@ async function signAndSend(id: string, intent: SignAndSendIntent): Promise<SignR
   })
 }
 
-// TODO (M6 — security core): drive the broker (requestQuotes → acceptQuote),
-// take the maker's partial PSBT, and DECODE it (+ RGB metadata) into deltas.
-// Until then this throws so nothing renders fabricated amounts.
-async function buildSignRequest(_id: string, _intent: SignAndSendIntent): Promise<SignRequest> {
-  void broker
-  throw new Error('buildSignRequest: broker round-trip + PSBT decode not implemented (ROADMAP M6)')
+// The security core: quote the buy, have the maker build the PSBT, then DECODE it
+// (BTC side, wallet-derived) + take the RGB amount from the quote → a SignRequest
+// with nothing trusted from the dApp. The RGB receive invoice + BTC funding address
+// come from the wallet SDK (the in-wasm adapter, currently stubbed); the decode is
+// real (rgb-wasm decode_psbt, verified against a live maker PSBT).
+async function buildSignRequest(id: string, intent: SignAndSendIntent): Promise<SignRequest> {
+  if (!intent.assetId || !intent.amount) {
+    throw new Error('signAndSend intent requires assetId + amount')
+  }
+  const network = sdk.getNetwork()
+  const brokerNet = toBrokerNetwork(network)
+
+  // 1. Quote the buy.
+  const quotes = await broker.requestQuotes({
+    base_asset: { network: brokerNet, kind: 'Rgb20', id: intent.assetId },
+    quote_asset: { network: brokerNet, kind: 'Btc', id: 'btc' },
+    side: 'Buy',
+    amount: intent.amount,
+  })
+  const quote = quotes[0]
+  if (!quote) throw new Error('no maker quoted this RFQ')
+
+  // 2. Accept → the maker builds the partial PSBT (needs our RGB invoice + funding).
+  const { invoice: rgbInvoice } = await sdk.witnessReceive({ assetId: intent.assetId, amount: intent.amount })
+  const fundingAddr = await sdk.getAddress()
+  const settle = await broker.acceptQuote(quote.quote_id, {
+    quote_id: quote.quote_id,
+    leg: { side: 'buy', rgb_invoice: rgbInvoice, btc_funding_addr: fundingAddr },
+  })
+  const psbt = settle.transfer?.partial_psbt
+  if (!psbt) throw new Error('accept returned no partial PSBT')
+
+  // 3. DECODE (verify the BTC side) + assemble.
+  const decoded = await decodePsbt(psbt, network)
+  let assetTicker = intent.assetId.slice(0, 10)
+  let assetPrecision = 0
+  try {
+    const bal = await sdk.getAssetBalance(intent.assetId)
+    assetTicker = bal.ticker
+    assetPrecision = bal.precision
+  } catch {
+    /* unknown asset — fall back to the contract id prefix */
+  }
+  const { connected = [] } = await chrome.storage.local.get('connected')
+  return assembleSignRequest({
+    id,
+    origin: 'app.colorex.exchange',
+    recognized: connected.includes('app.colorex.exchange'),
+    network,
+    decoded,
+    psbtBase64: psbt,
+    quoteId: quote.quote_id,
+    makerId: quote.maker_id,
+    contractId: quote.base_asset.id,
+    assetTicker,
+    assetPrecision,
+    rgbAmountRaw: quote.amount,
+    side: 'buy',
+  })
 }
 
-// TODO (M7): on approve → sdk.signPsbt → broker.submitSignedPsbt → accept
-// consignment → resolve; on reject → user_rejected.
+// On approve → sign our PSBT inputs, submit to the broker (maker finalizes +
+// broadcasts), absorb the returned consignment. On reject → user_rejected.
 async function finalize(id: string, approve: boolean): Promise<SignResult> {
   const p = pending.get(id)
   if (!p) return { ok: false, error: 'sign_failed', message: 'unknown request' }
   pending.delete(id)
-  const result: SignResult = approve
-    ? { ok: false, error: 'sign_failed', message: 'finalize not implemented (ROADMAP M7)' }
-    : { ok: false, error: 'user_rejected' }
+  if (!approve) {
+    const rejected: SignResult = { ok: false, error: 'user_rejected' }
+    p.settle(rejected)
+    return rejected
+  }
+  let result: SignResult
+  try {
+    const signed = await sdk.signPsbt(p.request.psbtBase64)
+    const settled = await broker.submitSignedPsbt(p.request.quoteId ?? '', signed)
+    if (settled.final_consignment) await sdk.acceptConsignment(settled.final_consignment)
+    result = settled.witness_txid
+      ? { ok: true, txid: settled.witness_txid, consignment: settled.final_consignment }
+      : { ok: false, error: 'broadcast_failed', message: 'no witness txid' }
+  } catch (e) {
+    result = { ok: false, error: 'sign_failed', message: (e as Error).message }
+  }
   p.settle(result)
   return result
 }

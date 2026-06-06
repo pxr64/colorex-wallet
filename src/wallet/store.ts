@@ -7,6 +7,7 @@ import { rgbReady, wasm } from './rgb'
 import { generateWallet, type GeneratedWallet } from './keys'
 import { decryptSeed, encryptSeed, type Vault } from './vault'
 import { addressUtxos, witnessOrds } from './esplora'
+import type { DecodedPsbt } from '../colorex/sign-request'
 
 export interface Asset {
   contractId: string
@@ -171,6 +172,27 @@ function b64ToBytes(b64: string): Uint8Array {
   const out = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
   return out
+}
+
+// The wallet's derived addresses across the keychains RGB swaps touch.
+async function ownedAddresses(network = 'signet'): Promise<string[]> {
+  const descriptor = await getDescriptor()
+  if (!descriptor) return []
+  await rgbReady()
+  const addrs: string[] = []
+  for (const keychain of [0, 1, 10]) {
+    addrs.push(...(JSON.parse(wasm.derive_addresses(descriptor, network, keychain, 20)) as string[]))
+  }
+  return addrs
+}
+
+/** Decode a maker's partial PSBT into the wallet's BTC side (which inputs/outputs
+ *  are ours, net delta, fee). The security core of a sign request. */
+export async function decodePsbt(psbtB64: string, network = 'signet'): Promise<DecodedPsbt> {
+  await openStock()
+  const [owned, addrs] = await Promise.all([ownedOutpoints(network), ownedAddresses(network)])
+  const bytes = b64ToBytes(psbtB64)
+  return JSON.parse(wasm.decode_psbt(bytes, JSON.stringify(owned), JSON.stringify(addrs))) as DecodedPsbt
 }
 
 /** Import (accept) an RGB asset from a base64 consignment. Parses the witness
