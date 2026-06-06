@@ -39,6 +39,23 @@ in wasm.** Decision confirmed: build on our own wasm core; **drop `@utexo/rgb-sd
 endpoints via `fetch` (runtime-agnostic services). A UTEXO partnership / their own
 wasm build can be revisited later — not on the MVP path.
 
+### Stateful `Stock` + persistence also proven (the last unknown)
+
+`demo_stock_persistence()` (in `rgb-wasm/`): a fresh `Stock::in_memory()` imports
+the NIA schema (`Kit::load` + `import_kit` — a real stateful mutation), then the
+three in-memory providers are strict-serialized to bytes, a new `Stock` is rebuilt
+from those bytes (`from_strict_serialized` + `Stock::with`), and re-queried:
+
+```
+schemata before=1, after_reload=1; serialized bytes stash=4432 state=10 index=22
+```
+
+The imported schema **survives the serialize → deserialize round trip in wasm.**
+This is the IndexedDB persistence model: wasm holds the `Stock` on the in-memory
+providers (`MemStash`/`MemState`/`MemIndex`), and JS persists/loads their
+strict-serialized bytes to IndexedDB — exactly what `FsBinStore` does with files
+natively. **No fundamental RGB unknowns remain; the rest is assembly.**
+
 ## What `@utexo/rgb-sdk` actually is
 
 - `@utexo/rgb-sdk@1.0.0-beta.8` — wraps `@utexo/rgb-lib`, uses `axios` (HTTP
