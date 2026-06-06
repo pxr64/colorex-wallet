@@ -68,8 +68,12 @@ export const Icon = {
   ),
 }
 
-export function Mono({ children, style }: { children: ReactNode; style?: CSSProperties }) {
-  return <span style={{ fontFamily: T.mono, ...style }}>{children}</span>
+export function Mono({ children, style, className }: { children: ReactNode; style?: CSSProperties; className?: string }) {
+  return (
+    <span className={className} style={{ fontFamily: T.mono, ...style }}>
+      {children}
+    </span>
+  )
 }
 
 export function Eyebrow({ children, style }: { children: ReactNode; style?: CSSProperties }) {

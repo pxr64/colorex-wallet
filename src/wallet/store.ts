@@ -6,7 +6,7 @@
 import { rgbReady, wasm } from './rgb'
 import { generateWallet, type GeneratedWallet } from './keys'
 import { decryptSeed, encryptSeed, type Vault } from './vault'
-import { addressUtxos, witnessOrds } from './esplora'
+import { addressUtxos, witnessOrds, type Utxo } from './esplora'
 import type { DecodedPsbt } from '../colorex/sign-request'
 
 export interface Asset {
@@ -142,6 +142,27 @@ export async function listAssets(): Promise<Asset[]> {
   } catch {
     return JSON.parse(s.list_assets()) as Asset[]
   }
+}
+
+export interface WalletSnapshot {
+  btcSats: number
+  assets: Asset[]
+}
+
+/** One Esplora scan → the wallet's BTC balance (sum of owned UTXOs) + the
+ *  owned-filtered RGB assets. Used by the home screen so it scans once. */
+export async function walletSnapshot(network = 'signet'): Promise<WalletSnapshot> {
+  const s = await openStock()
+  const tagged = await ownedAddresses(network)
+  if (tagged.length === 0) {
+    return { btcSats: 0, assets: JSON.parse(s.list_assets()) as Asset[] }
+  }
+  const lists = await Promise.all(tagged.map((t) => addressUtxos(t.address).catch(() => [] as Utxo[])))
+  const utxos = lists.flat()
+  const btcSats = utxos.reduce((sum, u) => sum + (u.value || 0), 0)
+  const owned = utxos.map((u) => `${u.txid}:${u.vout}`)
+  const assets = JSON.parse(s.list_assets_owned(JSON.stringify(owned))) as Asset[]
+  return { btcSats, assets }
 }
 
 /** Create a fresh wallet: generate keys (JS), encrypt the seed under `password`,

@@ -21,6 +21,7 @@ export async function txStatus(txid: string, base: string = ESPLORA_SIGNET): Pro
 export interface Utxo {
   txid: string
   vout: number
+  value: number // sats
 }
 
 /** GET /address/:addr/utxo — the wallet's UTXOs at an address. */
