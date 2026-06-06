@@ -1,23 +1,29 @@
 import { useEffect, useRef, useState } from 'react'
 import { T } from '../theme'
 import { Icon, Logo, Mono } from '../atoms'
+import { unlock } from '../../wallet/store'
 
-// Lock screen — ported from wallet-ui.jsx. (Password check is a placeholder until
-// the encrypted-seed vault lands; any ≥4-char password unlocks.)
+// Lock screen — decrypts the encrypted seed vault with the password (real:
+// wrong password → AES-GCM auth failure → stays locked).
 export function Lock({ onUnlock, onSetup }: { onUnlock: () => void; onSetup: () => void }) {
   const [pw, setPw] = useState('')
   const [show, setShow] = useState(false)
   const [err, setErr] = useState(false)
+  const [busy, setBusy] = useState(false)
   const ref = useRef<HTMLInputElement>(null)
   useEffect(() => {
     ref.current?.focus()
   }, [])
-  const submit = () => {
-    if (pw.length < 4) {
+  const submit = async () => {
+    if (!pw) {
       setErr(true)
       return
     }
-    onUnlock()
+    setBusy(true)
+    const ok = await unlock(pw)
+    setBusy(false)
+    if (ok) onUnlock()
+    else setErr(true)
   }
   return (
     <div className="cxw-in" style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '0 24px', background: T.bg }}>
@@ -46,10 +52,10 @@ export function Lock({ onUnlock, onSetup }: { onUnlock: () => void; onSetup: () 
               {show ? <Icon.eyeOff /> : <Icon.eye />}
             </button>
           </div>
-          {err && <Mono style={{ fontSize: 10.5, color: T.accent }}><span style={{ display: 'block', marginTop: 8 }}>Enter your password to continue</span></Mono>}
+          {err && <Mono style={{ fontSize: 10.5, color: T.accent }}><span style={{ display: 'block', marginTop: 8 }}>Incorrect password — try again.</span></Mono>}
 
-          <button className="cxw-btn" onClick={submit} style={{ width: '100%', marginTop: 14, height: 50, border: 'none', borderRadius: 13, background: T.accent, color: T.accentInk, fontFamily: T.body, fontSize: 15, fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, boxShadow: '0 10px 26px -12px rgba(184,90,44,0.7)' }}>
-            Unlock <Icon.arrow />
+          <button className="cxw-btn" disabled={busy} onClick={submit} style={{ width: '100%', marginTop: 14, height: 50, border: 'none', borderRadius: 13, background: T.accent, color: T.accentInk, fontFamily: T.body, fontSize: 15, fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, boxShadow: '0 10px 26px -12px rgba(184,90,44,0.7)' }}>
+            {busy ? 'Unlocking…' : 'Unlock'} <Icon.arrow />
           </button>
         </div>
       </div>

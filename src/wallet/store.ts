@@ -5,6 +5,7 @@
 
 import { rgbReady, wasm } from './rgb'
 import { generateWallet, type GeneratedWallet } from './keys'
+import { decryptSeed, encryptSeed, type Vault } from './vault'
 
 export interface Asset {
   contractId: string
@@ -54,9 +55,40 @@ async function kvPutAll(entries: Record<string, unknown>): Promise<void> {
 type Stock = InstanceType<typeof wasm.RgbStock>
 let stock: Stock | null = null
 
-/** Whether a wallet already exists on this device. */
+// The decrypted mnemonic — held in memory ONLY while unlocked; never persisted.
+let unlockedMnemonic: string | null = null
+
+/** Whether an (encrypted) wallet already exists on this device. */
 export async function walletExists(): Promise<boolean> {
-  return (await kvGet<string>('descriptor')) !== undefined
+  return (await kvGet<Vault>('vault')) !== undefined
+}
+
+export function isUnlocked(): boolean {
+  return unlockedMnemonic !== null
+}
+
+/** Clear the in-memory seed (e.g. on Lock or popup close). */
+export function lock(): void {
+  unlockedMnemonic = null
+}
+
+/** The unlocked mnemonic, for key derivation / signing. Null while locked. */
+export function unlockedSeed(): string | null {
+  return unlockedMnemonic
+}
+
+/** Decrypt the vault with `password` and hold the seed in memory. Returns false
+ *  on a wrong password (AES-GCM auth failure) or if no wallet exists. */
+export async function unlock(password: string): Promise<boolean> {
+  const vault = await kvGet<Vault>('vault')
+  if (!vault) return false
+  try {
+    unlockedMnemonic = await decryptSeed(vault, password)
+    await openStock()
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Load the RGB stock from IndexedDB (or create a fresh one) — idempotent. */
@@ -90,11 +122,14 @@ export async function listAssets(): Promise<Asset[]> {
   return JSON.parse(s.list_assets()) as Asset[]
 }
 
-/** Create a fresh wallet: generate keys (JS), init the stock (wasm), persist. */
-export async function createWallet(): Promise<GeneratedWallet> {
+/** Create a fresh wallet: generate keys (JS), encrypt the seed under `password`,
+ *  init the RGB stock (wasm), persist the vault + descriptor, and unlock it. */
+export async function createWallet(password: string): Promise<GeneratedWallet> {
   const w = generateWallet()
+  const vault = await encryptSeed(w.mnemonic, password)
   await openStock() // ensures a stock exists + persisted
-  await kvPutAll({ descriptor: w.descriptor })
+  await kvPutAll({ descriptor: w.descriptor, vault })
+  unlockedMnemonic = w.mnemonic
   return w
 }
 

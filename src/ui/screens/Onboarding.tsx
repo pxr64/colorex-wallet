@@ -8,19 +8,28 @@ interface Generated {
   address: string
 }
 
-// Real onboarding: generate keys in JS, init + persist the RGB stock (wasm) via
-// the store, and show the wallet. (Encrypted-seed vault is a later milestone; the
-// non-secret descriptor is persisted so the wallet survives reopens.)
+// Real onboarding: set a password, generate a BIP-39 wallet (JS), encrypt the
+// seed under that password (WebCrypto, see vault.ts), init + persist the RGB
+// stock (wasm). The plaintext seed is held only in memory after this.
 export function Onboarding({ onDone, onBack }: { onDone: () => void; onBack: () => void }) {
+  const [pw, setPw] = useState('')
+  const [pw2, setPw2] = useState('')
+  const [show, setShow] = useState(false)
   const [gen, setGen] = useState<Generated | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
+  const canCreate = pw.length >= 8 && pw === pw2
+
   async function create() {
+    if (!canCreate) {
+      setError('Password must be at least 8 characters and match.')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
-      const w = await createWallet()
+      const w = await createWallet(pw)
       const address = (await receiveAddress()) ?? ''
       setGen({ mnemonic: w.mnemonic, address })
     } catch (e) {
@@ -34,15 +43,21 @@ export function Onboarding({ onDone, onBack }: { onDone: () => void; onBack: () 
     <div className="cxw-in" style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '0 22px 22px', background: T.bg }}>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 16, overflowY: 'auto' }}>
         {!gen ? (
-          <div style={{ textAlign: 'center', display: 'grid', gap: 12, justifyItems: 'center' }}>
-            <Logo size={42} />
-            <div style={{ fontFamily: T.body, fontSize: 22, fontWeight: 600, letterSpacing: '-0.02em', color: T.ink }}>Set up your wallet</div>
-            <Mono style={{ fontSize: 11.5, color: T.mute }}>
-              <span style={{ display: 'block', maxWidth: 280, lineHeight: 1.6 }}>
-                Self-custodial RGB-on-Bitcoin. Keys are generated on this device; the
-                RGB engine + wallet run locally in WebAssembly.
-              </span>
-            </Mono>
+          <div style={{ display: 'grid', gap: 16 }}>
+            <div style={{ textAlign: 'center', display: 'grid', gap: 10, justifyItems: 'center' }}>
+              <Logo size={40} />
+              <div style={{ fontFamily: T.body, fontSize: 21, fontWeight: 600, letterSpacing: '-0.02em', color: T.ink }}>Set up your wallet</div>
+              <Mono style={{ fontSize: 11, color: T.mute }}>
+                <span style={{ display: 'block', maxWidth: 280, lineHeight: 1.55 }}>
+                  Choose a password. It encrypts your seed on this device — keys are
+                  generated locally and never leave it.
+                </span>
+              </Mono>
+            </div>
+            <div style={{ display: 'grid', gap: 9 }}>
+              <PwInput value={pw} onChange={setPw} show={show} onToggle={() => setShow((v) => !v)} placeholder="Password (min 8)" />
+              <PwInput value={pw2} onChange={setPw2} show={show} onToggle={() => setShow((v) => !v)} placeholder="Confirm password" />
+            </div>
           </div>
         ) : (
           <div style={{ display: 'grid', gap: 10 }}>
@@ -52,9 +67,12 @@ export function Onboarding({ onDone, onBack }: { onDone: () => void; onBack: () 
               </span>
               <div style={{ fontFamily: T.body, fontSize: 18, fontWeight: 600, color: T.ink }}>Wallet created</div>
             </div>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px', border: `1px dashed ${T.hairStrong}`, borderRadius: 12, background: T.accentSoft }}>
+              <span style={{ color: T.accent, flex: '0 0 auto', marginTop: 1 }}><Icon.shield /></span>
+              <Mono style={{ fontSize: 10.5, color: T.inkSoft }}><span style={{ lineHeight: 1.5 }}>Write down your recovery phrase and store it offline. It's the only way to restore this wallet.</span></Mono>
+            </div>
+            <Field label="Recovery phrase">{gen.mnemonic}</Field>
             <Field label="RGB receive address (keychain-10)">{gen.address}</Field>
-            <Field label="Recovery phrase — write it down">{gen.mnemonic}</Field>
-            <Mono style={{ fontSize: 10, color: T.faint, textAlign: 'center' }}>RGB engine + wallet running in wasm · persisted on-device</Mono>
           </div>
         )}
 
@@ -67,18 +85,37 @@ export function Onboarding({ onDone, onBack }: { onDone: () => void; onBack: () 
 
       <div style={{ display: 'grid', gap: 10 }}>
         {!gen ? (
-          <button className="cxw-btn" disabled={busy} onClick={create} style={primaryBtn}>
-            {busy ? 'Generating…' : 'Generate signet wallet'}
+          <button className="cxw-btn" disabled={busy || !canCreate} onClick={create} style={primaryBtn}>
+            {busy ? 'Generating…' : 'Create wallet'}
           </button>
         ) : (
           <button className="cxw-btn" onClick={onDone} style={primaryBtn}>
-            Continue to wallet <Icon.arrow />
+            I've saved it — continue <Icon.arrow />
           </button>
         )}
         <button className="cxw-btn" onClick={onBack} style={{ border: 'none', background: 'transparent', color: T.mute, fontFamily: T.body, fontSize: 12.5, padding: 4 }}>
           Back
         </button>
       </div>
+    </div>
+  )
+}
+
+function PwInput({ value, onChange, show, onToggle, placeholder }: { value: string; onChange: (v: string) => void; show: boolean; onToggle: () => void; placeholder: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px', height: 48, border: `1px solid ${T.hairStrong}`, borderRadius: 12, background: T.card }}>
+      <span style={{ color: T.faint, flex: '0 0 auto' }}><Icon.lock /></span>
+      <input
+        className="cxw-input"
+        type={show ? 'text' : 'password'}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={{ flex: 1, minWidth: 0, border: 'none', background: 'transparent', fontSize: 14, color: T.ink }}
+      />
+      <button className="cxw-btn" onClick={onToggle} style={{ border: 'none', background: 'transparent', color: T.faint, padding: 4 }}>
+        {show ? <Icon.eyeOff /> : <Icon.eye />}
+      </button>
     </div>
   )
 }
