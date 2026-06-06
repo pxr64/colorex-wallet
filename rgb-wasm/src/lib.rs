@@ -149,7 +149,10 @@ pub fn decode_psbt(
     for inp in psbt.inputs() {
         let op = inp.previous_outpoint.to_string();
         let val = inp.value().sats();
-        let ours = owned_ops.contains(&op);
+        // Ours if we hold the UTXO (by outpoint) or it spends one of our
+        // addresses (by the input's prev scriptPubkey).
+        let ours = owned_ops.contains(&op)
+            || owned_spks.iter().any(|s| *s == inp.prev_txout().script_pubkey);
         total_in = total_in.saturating_add(val);
         if ours {
             in_ours = in_ours.saturating_add(val);
