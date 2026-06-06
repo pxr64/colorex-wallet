@@ -10,12 +10,13 @@
 //! `load(...)` rebuilds the `Stock` from those bytes — mirroring how `FsBinStore`
 //! reads/writes the same providers as files natively.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::str::FromStr;
 
 use amplify::confinement::Confined;
-use bpstd::{Keychain, Network, Txid, XpubDerivable};
+use bpstd::psbt::Psbt;
+use bpstd::{Address, Keychain, Network, Txid, XpubDerivable};
 use bpwallet::Wallet;
 use rgb::containers::{ConsignmentExt, FileContent, Kit, Transfer, ValidConsignment};
 use rgb::contract::FilterIncludeAll;
@@ -117,6 +118,71 @@ pub fn derive_addresses(descriptor: &str, network: &str, keychain: u8, count: u3
         .map(|d| d.addr.to_string())
         .collect();
     Ok(serde_json::Value::Array(addrs.into_iter().map(serde_json::Value::String).collect()).to_string())
+}
+
+/// Decode a maker's partial PSBT into the wallet's BITCOIN side: which inputs and
+/// outputs are ours (by owned outpoint / owned address), the net BTC delta, and
+/// the fee. This is the security core of a sign request — it verifies the bitcoin
+/// the wallet pays, independent of anything the dApp claims. The RGB delta comes
+/// from the quote/invoice (what the wallet asked for), validated later on accept.
+/// `owned_outpoints` = `["txid:vout", …]` (our UTXOs); `owned_addresses` = our
+/// derived address strings (to spot our change/receive outputs).
+#[wasm_bindgen]
+pub fn decode_psbt(
+    psbt_bytes: &[u8],
+    owned_outpoints_json: &str,
+    owned_addresses_json: &str,
+) -> Result<String, JsError> {
+    let psbt = Psbt::deserialize(psbt_bytes).map_err(|e| JsError::new(&format!("parse psbt: {e}")))?;
+    let owned_ops: HashSet<String> = serde_json::from_str(owned_outpoints_json)
+        .map_err(|e| JsError::new(&format!("parse outpoints: {e}")))?;
+    let owned_addrs: Vec<String> = serde_json::from_str(owned_addresses_json)
+        .map_err(|e| JsError::new(&format!("parse addresses: {e}")))?;
+    let owned_spks: Vec<_> = owned_addrs
+        .iter()
+        .filter_map(|a| Address::from_str(a).ok().map(|ad| ad.script_pubkey()))
+        .collect();
+
+    let mut inputs = Vec::new();
+    let mut total_in: u64 = 0;
+    let mut in_ours: u64 = 0;
+    for inp in psbt.inputs() {
+        let op = inp.previous_outpoint.to_string();
+        let val = inp.value().sats();
+        let ours = owned_ops.contains(&op);
+        total_in = total_in.saturating_add(val);
+        if ours {
+            in_ours = in_ours.saturating_add(val);
+        }
+        inputs.push(serde_json::json!({ "outpoint": op, "valueSats": val, "ours": ours }));
+    }
+
+    let mut outputs = Vec::new();
+    let mut total_out: u64 = 0;
+    let mut out_ours: u64 = 0;
+    for out in psbt.outputs() {
+        let val = out.amount.sats();
+        let ours = owned_spks.iter().any(|s| *s == out.script);
+        total_out = total_out.saturating_add(val);
+        if ours {
+            out_ours = out_ours.saturating_add(val);
+        }
+        outputs.push(serde_json::json!({ "valueSats": val, "ours": ours }));
+    }
+
+    let fee = total_in.saturating_sub(total_out);
+    let btc_delta = out_ours as i64 - in_ours as i64;
+    Ok(serde_json::json!({
+        "feeSats": fee,
+        "btcInOursSats": in_ours,
+        "btcOutOursSats": out_ours,
+        "btcDeltaSats": btc_delta,
+        "totalInSats": total_in,
+        "totalOutSats": total_out,
+        "inputs": inputs,
+        "outputs": outputs,
+    })
+    .to_string())
 }
 
 // ---------------------------------------------------------------------------
