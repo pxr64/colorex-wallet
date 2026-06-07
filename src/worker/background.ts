@@ -85,6 +85,10 @@ async function handleProvider(msg: ProviderRequest, sendResponse: (r: unknown) =
         const invoice = await createInvoice(msg.contractId, msg.amount, sdk.getNetwork())
         return sendResponse({ id: msg.id, ok: true, result: invoice })
       }
+      case 'buildConsignment':
+        // Sell leg: the taker builds a consignment to the maker's invoice. The
+        // RGB send path isn't in rgb-wasm yet — see colorex-wallet#3.
+        throw new Error('RGB send not implemented yet (rgb-wasm create_consignment pending) — see #3')
       case 'signAndSend': {
         const result = await signAndSend(msg.id, msg.intent)
         return sendResponse({ id: msg.id, ok: result.ok, result, error: result.ok ? undefined : result.error })
