@@ -37,7 +37,7 @@ export default defineManifest((env) => {
         run_at: 'document_start',
       },
     ],
-    permissions: ['storage'],
+    permissions: ['storage', 'alarms'],
     host_permissions: origins,
   }
 })

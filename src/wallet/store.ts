@@ -23,12 +23,25 @@ export function formatUnits(raw: number, precision: number): string {
 }
 
 const DB_NAME = 'colorex-wallet'
+const DB_VERSION = 2
 const STORE_NAME = 'rgb'
+/** Object store holding the persistent consignment import queue (keyPath `id`).
+ *  Added in DB v2 — see `import-queue.ts`. */
+export const QUEUE_STORE = 'import-queue'
 
-function db(): Promise<IDBDatabase> {
+/** Open the shared wallet IndexedDB. Both the RGB stock (`rgb`, kv-shaped) and the
+ *  import queue (`import-queue`, keyPath records) live here so they share one
+ *  connection + version. The popup and the worker each open their own connection;
+ *  IndexedDB is the only state they share (separate JS realms, separate in-memory
+ *  `stock`). */
+export function db(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1)
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME)
+    const req = indexedDB.open(DB_NAME, DB_VERSION)
+    req.onupgradeneeded = () => {
+      const d = req.result
+      if (!d.objectStoreNames.contains(STORE_NAME)) d.createObjectStore(STORE_NAME)
+      if (!d.objectStoreNames.contains(QUEUE_STORE)) d.createObjectStore(QUEUE_STORE, { keyPath: 'id' })
+    }
     req.onsuccess = () => resolve(req.result)
     req.onerror = () => reject(req.error)
   })
@@ -303,14 +316,54 @@ export async function decodePsbt(psbtB64: string, network = 'signet'): Promise<D
   return JSON.parse(wasm.decode_psbt(bytes, JSON.stringify(owned), JSON.stringify(addrs))) as DecodedPsbt
 }
 
-/** Import (accept) an RGB asset from a base64 consignment. Parses the witness
- *  txids in wasm, fetches their chain status via Esplora, then accepts the
- *  consignment (validate + accept + promote) and persists. */
-export async function importAsset(consignmentB64: string, network = 'signet'): Promise<void> {
+/** The witness txids a consignment commits to (parsed in wasm — no accept, no
+ *  chain access). The import queue keys + watches an item by these. */
+export async function consignmentWitnessIds(consignmentB64: string): Promise<string[]> {
   const s = await openStock()
-  const bytes = b64ToBytes(consignmentB64)
-  const txids = JSON.parse(s.consignment_witness_ids(bytes)) as string[]
-  const ords = await witnessOrds(txids)
-  s.accept_consignment(bytes, JSON.stringify(ords), network)
+  return JSON.parse(s.consignment_witness_ids(b64ToBytes(consignmentB64))) as string[]
+}
+
+/** Accept a consignment into the stock with caller-supplied witness ords, then
+ *  persist. Idempotent: re-accepting an already-accepted consignment with fresh
+ *  (now-mined) ords promotes the allocation's WitnessOrd Tentative→Mined — the
+ *  queue's promote path, since the wasm exposes no separate `update_witnesses`. */
+export async function acceptConsignmentOrds(
+  consignmentB64: string,
+  ords: Array<{ txid: string; height?: number; time?: number }>,
+  network = 'signet',
+): Promise<void> {
+  const s = await openStock()
+  s.accept_consignment(b64ToBytes(consignmentB64), JSON.stringify(ords), network)
   await persist()
+}
+
+/** Re-derive contract state from fresh witness ords WITHOUT re-accepting a
+ *  consignment — the queue's promote/revert primitive. OVERLAY semantics: only the
+ *  listed witnesses change; every other known witness keeps its current ord, so
+ *  touching one asset never disturbs the rest. `{ txid, height?, time? }` → Mined
+ *  (promote), `{ txid, archived: true }` → Archived (revert, allocation dropped). */
+export async function updateWitnesses(
+  ords: Array<{ txid: string; height?: number; time?: number; archived?: boolean }>,
+  network = 'signet',
+): Promise<void> {
+  const s = await openStock()
+  s.update_witnesses(JSON.stringify(ords), network)
+  await persist()
+}
+
+/** Every witness txid the stock knows — for a wallet-wide witness sync (fetch each
+ *  one's chain status, feed back via `updateWitnesses`). */
+export async function stockWitnessIds(): Promise<string[]> {
+  const s = await openStock()
+  return JSON.parse(s.stock_witness_ids()) as string[]
+}
+
+/** Import (accept) an RGB asset from a base64 consignment in one shot. Parses the
+ *  witness txids, fetches their chain status via Esplora, then accepts + persists.
+ *  The import queue (`import-queue.ts`) is the robust, restart-surviving path; this
+ *  remains for direct/synchronous use. */
+export async function importAsset(consignmentB64: string, network = 'signet'): Promise<void> {
+  const txids = await consignmentWitnessIds(consignmentB64)
+  const ords = await witnessOrds(txids)
+  await acceptConsignmentOrds(consignmentB64, ords, network)
 }

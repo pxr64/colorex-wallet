@@ -19,16 +19,22 @@ export interface SignAndSendIntent {
   consignment?: string
 }
 
-/** page → worker (relayed by the content script) */
+/** page → worker (relayed by the content script). The queue kinds
+ *  (`getImportQueue`/`enqueueConsignment`/`dismissImportItem`/`drainImportQueue`)
+ *  are also used by the popup, which sends them directly via chrome.runtime. */
 export type ProviderRequest =
   | { id: string; kind: 'connect'; origin: string }
   | { id: string; kind: 'getAccounts' }
   | { id: string; kind: 'getBalances' }
   | { id: string; kind: 'createInvoice'; contractId: string; amount: number }
   | { id: string; kind: 'buildConsignment'; invoice: string }
-  | { id: string; kind: 'acceptConsignment'; consignment: string }
+  | { id: string; kind: 'acceptConsignment'; consignment: string; contractId?: string; amount?: number }
   | { id: string; kind: 'signAndSend'; intent: SignAndSendIntent; origin: string }
   | { id: string; kind: 'signPsbt'; psbtBase64: string }
+  | { id: string; kind: 'getImportQueue' }
+  | { id: string; kind: 'enqueueConsignment'; consignment: string }
+  | { id: string; kind: 'dismissImportItem'; itemId: string }
+  | { id: string; kind: 'drainImportQueue' }
 
 /** BTC + RGB balances the dApp reads to render inventory. Amounts are base units
  *  (sats for BTC; the asset's base units at `precision` for RGB). */

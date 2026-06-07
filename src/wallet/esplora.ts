@@ -18,6 +18,17 @@ export async function txStatus(txid: string, base: string = ESPLORA_SIGNET): Pro
   return (await res.json()) as TxStatus
 }
 
+/** Like `txStatus`, but returns null when the node has never heard of the txid
+ *  (404). A 404 means the tx is absent from mempool + chain — either not yet
+ *  propagated (right after broadcast) or evicted/replaced. The import queue uses
+ *  the distinction "seen-in-mempool, now absent" to detect a dropped witness. */
+export async function txStatusOrNull(txid: string, base: string = ESPLORA_SIGNET): Promise<TxStatus | null> {
+  const res = await fetch(`${base}/tx/${txid}/status`)
+  if (res.status === 404) return null
+  if (!res.ok) throw new Error(`esplora /tx/${txid}/status → ${res.status}`)
+  return (await res.json()) as TxStatus
+}
+
 export interface Utxo {
   txid: string
   vout: number

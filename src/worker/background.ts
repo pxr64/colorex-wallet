@@ -11,7 +11,8 @@
 import { assembleSignRequest } from '../colorex/sign-request'
 import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
-import { createInvoice, decodePsbt, importAsset } from '../wallet/store'
+import { createInvoice, decodePsbt } from '../wallet/store'
+import { drain, enqueue, getQueue, removeItem } from '../wallet/import-queue'
 import type { SignRequest, SignResult } from '../types/sign-request'
 import type {
   ConnectRequest,
@@ -56,6 +57,32 @@ chrome.windows.onRemoved.addListener((windowId) => {
 
 const POPUP_KINDS = new Set(['getSignRequest', 'decide', 'getConnectRequest', 'decideConnect'])
 
+// --- import-queue drain scheduling (MV3) ---
+// The worker is ephemeral, so the drain loop is woken by chrome.alarms (survives
+// the worker dying — setInterval would not), plus onStartup and a kick on load.
+// The popup also pokes the worker (drainImportQueue) when it opens. Each wake-up
+// processes the persisted queue: accept pending consignments, promote mined ones,
+// flag dropped ones.
+const DRAIN_ALARM = 'import-queue-drain'
+
+async function ensureDrainAlarm(): Promise<void> {
+  if (!(await chrome.alarms.get(DRAIN_ALARM))) {
+    await chrome.alarms.create(DRAIN_ALARM, { periodInMinutes: 1 })
+  }
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === DRAIN_ALARM) void drain()
+})
+chrome.runtime.onStartup.addListener(() => {
+  void ensureDrainAlarm()
+  void drain()
+})
+chrome.runtime.onInstalled.addListener(() => void ensureDrainAlarm())
+// Kick once on every worker spin-up (covers the wake that revived the worker).
+void ensureDrainAlarm()
+void drain()
+
 // --- provider requests from the content script ---
 chrome.runtime.onMessage.addListener((msg: ProviderRequest | PopupRequest, _sender, sendResponse) => {
   if ('kind' in msg && POPUP_KINDS.has(msg.kind)) {
@@ -90,11 +117,33 @@ async function handleProvider(msg: ProviderRequest, sendResponse: (r: unknown) =
         // RGB send path isn't in rgb-wasm yet — see colorex-wallet#3.
         throw new Error('RGB send not implemented yet (rgb-wasm create_consignment pending) — see #3')
       case 'acceptConsignment': {
-        // Buy leg, after broadcast: absorb the maker's consignment into the stash
-        // so the received RGB shows in the wallet (validate + accept + persist).
-        await importAsset(msg.consignment, sdk.getNetwork())
+        // Buy leg, after broadcast: ENQUEUE the maker's consignment (persistent,
+        // restart-surviving) rather than a one-shot import — the drain loop accepts
+        // it + watches the witness tx (mined → spendable, dropped → reverted). Non-
+        // blocking: we return once it's safely queued; the drain runs in background.
+        await enqueue({
+          consignment: msg.consignment,
+          network: sdk.getNetwork(),
+          source: 'swap',
+          meta: { contractId: msg.contractId, amountRaw: msg.amount },
+        })
+        void drain()
         return sendResponse({ id: msg.id, ok: true, result: null })
       }
+      case 'getImportQueue':
+        return sendResponse({ id: msg.id, ok: true, result: await getQueue() })
+      case 'enqueueConsignment': {
+        // Manual paste path (from the popup). Same persistent queue as a swap.
+        const item = await enqueue({ consignment: msg.consignment, network: sdk.getNetwork(), source: 'manual' })
+        void drain()
+        return sendResponse({ id: msg.id, ok: true, result: item })
+      }
+      case 'dismissImportItem':
+        await removeItem(msg.itemId)
+        return sendResponse({ id: msg.id, ok: true, result: null })
+      case 'drainImportQueue':
+        await drain()
+        return sendResponse({ id: msg.id, ok: true, result: await getQueue() })
       case 'signAndSend': {
         const result = await signAndSend(msg.id, msg.intent, msg.origin)
         return sendResponse({ id: msg.id, ok: result.ok, result, error: result.ok ? undefined : result.error })
