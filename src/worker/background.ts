@@ -11,7 +11,7 @@
 import { assembleSignRequest } from '../colorex/sign-request'
 import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
-import { decodePsbt } from '../wallet/store'
+import { createInvoice, decodePsbt } from '../wallet/store'
 import type { SignRequest, SignResult } from '../types/sign-request'
 import type {
   ConnectRequest,
@@ -79,6 +79,12 @@ async function handleProvider(msg: ProviderRequest, sendResponse: (r: unknown) =
         return sendResponse({ id: msg.id, ok: true, result: await accounts() })
       case 'getBalances':
         return sendResponse({ id: msg.id, ok: true, result: await balances() })
+      case 'createInvoice': {
+        // Taker's RGB receive invoice (witness-vout). Built from the public
+        // descriptor + stock — no seed needed.
+        const invoice = await createInvoice(msg.contractId, msg.amount, sdk.getNetwork())
+        return sendResponse({ id: msg.id, ok: true, result: invoice })
+      }
       case 'signAndSend': {
         const result = await signAndSend(msg.id, msg.intent)
         return sendResponse({ id: msg.id, ok: result.ok, result, error: result.ok ? undefined : result.error })
