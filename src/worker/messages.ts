@@ -26,6 +26,7 @@ export type ProviderRequest =
   | { id: string; kind: 'getBalances' }
   | { id: string; kind: 'createInvoice'; contractId: string; amount: number }
   | { id: string; kind: 'buildConsignment'; invoice: string }
+  | { id: string; kind: 'acceptConsignment'; consignment: string }
   | { id: string; kind: 'signAndSend'; intent: SignAndSendIntent; origin: string }
   | { id: string; kind: 'signPsbt'; psbtBase64: string }
 

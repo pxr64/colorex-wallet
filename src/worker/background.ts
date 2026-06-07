@@ -11,7 +11,7 @@
 import { assembleSignRequest } from '../colorex/sign-request'
 import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
-import { createInvoice, decodePsbt } from '../wallet/store'
+import { createInvoice, decodePsbt, importAsset } from '../wallet/store'
 import type { SignRequest, SignResult } from '../types/sign-request'
 import type {
   ConnectRequest,
@@ -89,6 +89,12 @@ async function handleProvider(msg: ProviderRequest, sendResponse: (r: unknown) =
         // Sell leg: the taker builds a consignment to the maker's invoice. The
         // RGB send path isn't in rgb-wasm yet — see colorex-wallet#3.
         throw new Error('RGB send not implemented yet (rgb-wasm create_consignment pending) — see #3')
+      case 'acceptConsignment': {
+        // Buy leg, after broadcast: absorb the maker's consignment into the stash
+        // so the received RGB shows in the wallet (validate + accept + persist).
+        await importAsset(msg.consignment, sdk.getNetwork())
+        return sendResponse({ id: msg.id, ok: true, result: null })
+      }
       case 'signAndSend': {
         const result = await signAndSend(msg.id, msg.intent, msg.origin)
         return sendResponse({ id: msg.id, ok: result.ok, result, error: result.ok ? undefined : result.error })
