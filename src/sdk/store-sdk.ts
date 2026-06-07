@@ -3,7 +3,14 @@
 // actually built are wired; only create_invoice (blind/witnessReceive) and the
 // taproot signPsbt are still pending wasm work.
 
-import { createInvoice, fundingAddress, importAsset, listAssets as storeListAssets, openStock } from '../wallet/store'
+import {
+  createInvoice,
+  fundingAddress,
+  importAsset,
+  listAssets as storeListAssets,
+  openStock,
+  walletSnapshot,
+} from '../wallet/store'
 import type { SignInput } from '../types/sign-request'
 import type { AssetBalance, BitcoinNetworkName, ReceiveInvoice, WalletSdk } from './wallet-sdk'
 
@@ -21,8 +28,11 @@ export class StoreWalletSdk implements WalletSdk {
     return this.network
   }
 
-  getBtcBalance(): Promise<{ spendableSats: number; totalSats: number }> {
-    return PENDING('getBtcBalance')
+  async getBtcBalance(): Promise<{ spendableSats: number; totalSats: number }> {
+    // Esplora scan over the wallet's owned addresses (no confirmed/unconfirmed
+    // split yet — spendable == total).
+    const { btcSats } = await walletSnapshot(this.network)
+    return { spendableSats: btcSats, totalSats: btcSats }
   }
 
   async listAssets(): Promise<AssetBalance[]> {
