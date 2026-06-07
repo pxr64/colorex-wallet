@@ -34,16 +34,16 @@ export function App() {
   )
 
   if (approvalId) {
+    // Connect needs no seed — the address comes from the public descriptor and
+    // approving only records the origin — so don't make the user unlock for it.
+    // Signing does need the unlocked seed, so it stays gated.
+    if (approvalKind === 'connect') {
+      return shell(<ConnectScreen requestId={approvalId} />)
+    }
     if (!approvalUnlocked) {
       return shell(<Lock onUnlock={() => setApprovalUnlocked(true)} onSetup={() => undefined} />)
     }
-    return shell(
-      approvalKind === 'connect' ? (
-        <ConnectScreen requestId={approvalId} />
-      ) : (
-        <SignScreen requestId={approvalId} />
-      ),
-    )
+    return shell(<SignScreen requestId={approvalId} />)
   }
 
   let screen: ReactNode
