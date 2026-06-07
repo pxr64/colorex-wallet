@@ -71,6 +71,7 @@ export function SignScreen({ requestId, onClose }: { requestId: string; onClose?
       setResult(r)
       setStep(r.ok ? 'done' : 'review')
     } catch (e) {
+      console.error('[colorex] signPsbt failed', e)
       setResult({ ok: false, error: 'sign_failed', message: (e as Error).message })
       setStep('review')
     }
@@ -207,6 +208,13 @@ export function SignScreen({ requestId, onClose }: { requestId: string; onClose?
 
       <div className="cxw-scroll cxw-slide" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 16px 16px' }}>
         <div style={{ display: 'grid', gap: 12 }}>
+          {result && !result.ok && (
+            <div style={{ padding: '10px 13px', border: `1px solid ${T.warn}`, borderRadius: 12, background: 'rgba(201,138,46,0.08)' }}>
+              <Mono style={{ fontSize: 11, color: T.warn }}>
+                <span style={{ lineHeight: 1.5 }}>Couldn't sign: {result.message ?? result.error}</span>
+              </Mono>
+            </div>
+          )}
           {/* origin / trust */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '11px 13px', border: `1px solid ${req.recognized ? T.hair : T.warn}`, borderRadius: 14, background: T.card }}>
             <span style={{ width: 34, height: 34, flex: '0 0 auto', borderRadius: 10, border: `1px solid ${T.hairStrong}`, background: T.bg, color: T.inkSoft, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
