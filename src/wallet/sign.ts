@@ -42,7 +42,10 @@ export function signPsbt(psbtB64: string, signInputs: SignInput[], mnemonic: str
     // internal key (x-only) before signing; signIdx then does the BIP-86 tweak +
     // key-path Schnorr sign. Finalize our input (the maker finalizes its own).
     tx.updateInput(si.index, { tapInternalKey: node.publicKey.slice(1) })
-    tx.signIdx(node.privateKey, si.index)
+    // The maker marks the input SIGHASH_ALL (0x01); @scure defaults to allowing
+    // only SIGHASH_DEFAULT (0x00) for taproot. Both are "sign everything" — permit
+    // the one the maker set so signing matches its PSBT.
+    tx.signIdx(node.privateKey, si.index, [btc.SigHash.DEFAULT, btc.SigHash.ALL])
     tx.finalizeIdx(si.index)
   }
   return bytesToB64(tx.toPSBT())
