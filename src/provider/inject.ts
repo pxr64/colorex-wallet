@@ -44,7 +44,10 @@ const provider: ColorexProvider = {
   buildConsignment: (invoice) => call('buildConsignment', { invoice }) as Promise<string>,
   signPsbt: (psbtBase64) => call('signPsbt', { psbtBase64 }) as Promise<string>,
   signAndSend: (intent) =>
-    call('signAndSend', { intent }) as Promise<{ txid: string; consignment?: string }>,
+    call('signAndSend', { intent, origin: window.location.origin }) as Promise<{
+      txid: string
+      consignment?: string
+    }>,
 }
 
 ;(window as unknown as { colorex: ColorexProvider }).colorex = provider

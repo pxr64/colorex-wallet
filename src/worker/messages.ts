@@ -26,7 +26,7 @@ export type ProviderRequest =
   | { id: string; kind: 'getBalances' }
   | { id: string; kind: 'createInvoice'; contractId: string; amount: number }
   | { id: string; kind: 'buildConsignment'; invoice: string }
-  | { id: string; kind: 'signAndSend'; intent: SignAndSendIntent }
+  | { id: string; kind: 'signAndSend'; intent: SignAndSendIntent; origin: string }
   | { id: string; kind: 'signPsbt'; psbtBase64: string }
 
 /** BTC + RGB balances the dApp reads to render inventory. Amounts are base units

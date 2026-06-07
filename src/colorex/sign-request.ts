@@ -37,6 +37,14 @@ export interface AssembleParams {
 }
 
 const toBtc = (sats: number) => sats / 1e8
+
+/** Approximate fee rate (sat/vB) from the total fee and an estimated vsize.
+ *  The exact vsize needs the final witnesses (not present in a partial PSBT),
+ *  so this estimates a taproot tx: ~10.5 overhead + ~57.5/P2TR input + ~43/output. */
+function estimateRateSatVb(d: DecodedPsbt): number {
+  const vbytes = Math.ceil(10.5 + d.inputs.length * 57.5 + d.outputs.length * 43)
+  return vbytes > 0 ? Math.max(1, Math.round(d.feeSats / vbytes)) : 0
+}
 const sats = (n: number) => `${n.toLocaleString('en-US')} sats`
 
 export function assembleSignRequest(p: AssembleParams): SignRequest {
@@ -69,7 +77,7 @@ export function assembleSignRequest(p: AssembleParams): SignRequest {
     counterparty: p.makerId,
     contract: { kind: 'RGB-20 transfer', id: p.contractId },
     deltas,
-    fee: { rateSatVb: 0, btc: toBtc(p.decoded.feeSats), usd: 0 },
+    fee: { rateSatVb: estimateRateSatVb(p.decoded), btc: toBtc(p.decoded.feeSats), usd: 0 },
     network: p.network,
     inputs,
     outputs,

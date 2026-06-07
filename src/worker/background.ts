@@ -90,7 +90,7 @@ async function handleProvider(msg: ProviderRequest, sendResponse: (r: unknown) =
         // RGB send path isn't in rgb-wasm yet — see colorex-wallet#3.
         throw new Error('RGB send not implemented yet (rgb-wasm create_consignment pending) — see #3')
       case 'signAndSend': {
-        const result = await signAndSend(msg.id, msg.intent)
+        const result = await signAndSend(msg.id, msg.intent, msg.origin)
         return sendResponse({ id: msg.id, ok: result.ok, result, error: result.ok ? undefined : result.error })
       }
       case 'signPsbt': {
@@ -142,8 +142,8 @@ function requestConnect(id: string, origin: string): Promise<boolean> {
 
 // Build the verified SignRequest, open the approval window, and resolve when the
 // user decides. The promise the dApp awaits is settled via `pending`.
-async function signAndSend(id: string, intent: SignAndSendIntent): Promise<SignResult> {
-  const request = await buildSignRequest(id, intent)
+async function signAndSend(id: string, intent: SignAndSendIntent, origin: string): Promise<SignResult> {
+  const request = await buildSignRequest(id, intent, origin)
   return new Promise<SignResult>((resolve) => {
     pending.set(id, { request, settle: resolve })
     void openApprovalWindow(id)
@@ -155,7 +155,7 @@ async function signAndSend(id: string, intent: SignAndSendIntent): Promise<SignR
 // with nothing trusted from the dApp. The RGB receive invoice + BTC funding address
 // come from the wallet SDK (the in-wasm adapter, currently stubbed); the decode is
 // real (rgb-wasm decode_psbt, verified against a live maker PSBT).
-async function buildSignRequest(id: string, intent: SignAndSendIntent): Promise<SignRequest> {
+async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: string): Promise<SignRequest> {
   if (!intent.psbt) {
     throw new Error('signAndSend requires the maker PSBT (the dApp builds it via the broker)')
   }
@@ -179,8 +179,8 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent): Promise<
   const { connected = [] } = await chrome.storage.local.get('connected')
   return assembleSignRequest({
     id,
-    origin: 'app.colorex.exchange',
-    recognized: connected.includes('app.colorex.exchange'),
+    origin,
+    recognized: connected.includes(origin),
     network,
     decoded,
     psbtBase64: intent.psbt,
