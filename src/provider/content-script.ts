@@ -1,17 +1,11 @@
-// Content script (isolated world). Injects the page provider and relays messages
-// between the page and the background worker. The page and worker can't talk
-// directly; everything hops through here.
-
-// 1. Inject the provider into the page's JS context.
-const s = document.createElement('script')
-s.src = chrome.runtime.getURL('src/provider/inject.ts')
-s.type = 'module'
-s.onload = () => s.remove()
-;(document.head || document.documentElement).appendChild(s)
+// Content script (isolated world). Relays messages between the page and the
+// background worker — the page and worker can't talk directly. The provider
+// itself (window.colorex) is set by inject.ts, which runs as a separate
+// MAIN-world content script (see manifest.ts).
 
 const TARGET = 'colorex:provider'
 
-// 2. page → worker → page
+// page → worker → page
 window.addEventListener('message', async (ev) => {
   if (ev.source !== window || ev.data?.target !== TARGET) return
   const { id, kind, ...rest } = ev.data

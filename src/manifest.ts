@@ -21,16 +21,20 @@ export default defineManifest((env) => {
     },
     background: { service_worker: 'src/worker/background.ts', type: 'module' },
     content_scripts: [
+      // Runs in the page's MAIN world so it can set window.colorex. Declaring it
+      // as a content script (not a hand-injected <script>) makes crxjs COMPILE it
+      // to real JS — a raw .ts file loaded as a module would fail to parse.
+      {
+        matches: origins,
+        js: ['src/provider/inject.ts'],
+        run_at: 'document_start',
+        world: 'MAIN',
+      },
+      // Isolated world: relays messages between the page and the worker.
       {
         matches: origins,
         js: ['src/provider/content-script.ts'],
         run_at: 'document_start',
-      },
-    ],
-    web_accessible_resources: [
-      {
-        resources: ['src/provider/inject.ts'],
-        matches: origins,
       },
     ],
     permissions: ['storage'],
