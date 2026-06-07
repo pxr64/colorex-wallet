@@ -35,8 +35,18 @@ export type ProviderResponse =
 export type PopupRequest =
   | { kind: 'getSignRequest'; id: string }
   | { kind: 'decide'; id: string; approve: boolean; signedPsbt?: string }
+  | { kind: 'getConnectRequest'; id: string }
+  | { kind: 'decideConnect'; id: string; approve: boolean }
 
 export type PopupResponse =
   | { kind: 'signRequest'; request: SignRequest }
+  | { kind: 'connectRequest'; request: ConnectRequest }
   | { kind: 'notFound' }
   | { kind: 'decided'; result: SignResult }
+  | { kind: 'connectDecided'; approved: boolean }
+
+/** A dApp connection request awaiting user approval in the popup. */
+export interface ConnectRequest {
+  id: string
+  origin: string
+}

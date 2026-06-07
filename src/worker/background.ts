@@ -13,7 +13,7 @@ import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
 import { decodePsbt } from '../wallet/store'
 import type { SignRequest, SignResult } from '../types/sign-request'
-import type { PopupRequest, PopupResponse, ProviderRequest, SignAndSendIntent } from './messages'
+import type { ConnectRequest, PopupRequest, PopupResponse, ProviderRequest, SignAndSendIntent } from './messages'
 
 // The wallet is a wallet-agnostic SIGNER. It does NOT talk to the Colorex broker —
 // the dApp orchestrates the swap (RFQ → accept) and hands us the maker's PSBT; we
@@ -27,10 +27,32 @@ interface Pending {
 }
 const pending = new Map<string, Pending>()
 
+interface PendingConnect {
+  request: ConnectRequest
+  settle: (approved: boolean) => void
+}
+const pendingConnect = new Map<string, PendingConnect>()
+// Maps an approval window id → connect request id, so closing the window without
+// deciding settles the dApp's connect() promise as a rejection (not a hang).
+const connectWindows = new Map<number, string>()
+
+chrome.windows.onRemoved.addListener((windowId) => {
+  const id = connectWindows.get(windowId)
+  if (id == null) return
+  connectWindows.delete(windowId)
+  const p = pendingConnect.get(id)
+  if (p) {
+    pendingConnect.delete(id)
+    p.settle(false)
+  }
+})
+
+const POPUP_KINDS = new Set(['getSignRequest', 'decide', 'getConnectRequest', 'decideConnect'])
+
 // --- provider requests from the content script ---
 chrome.runtime.onMessage.addListener((msg: ProviderRequest | PopupRequest, _sender, sendResponse) => {
-  if ('kind' in msg && (msg.kind === 'getSignRequest' || msg.kind === 'decide')) {
-    handlePopup(msg, sendResponse)
+  if ('kind' in msg && POPUP_KINDS.has(msg.kind)) {
+    handlePopup(msg as PopupRequest, sendResponse)
     return true
   }
   handleProvider(msg as ProviderRequest, sendResponse)
@@ -40,9 +62,12 @@ chrome.runtime.onMessage.addListener((msg: ProviderRequest | PopupRequest, _send
 async function handleProvider(msg: ProviderRequest, sendResponse: (r: unknown) => void) {
   try {
     switch (msg.kind) {
-      case 'connect':
-        await markConnected(msg.origin)
-        return sendResponse({ id: msg.id, ok: true, result: { connected: true } })
+      case 'connect': {
+        // Ask the user to approve the connection (opens the approval popup).
+        const approved = await requestConnect(msg.id, msg.origin)
+        if (approved) await markConnected(msg.origin)
+        return sendResponse({ id: msg.id, ok: true, result: { connected: approved } })
+      }
       case 'getAccounts':
         return sendResponse({ id: msg.id, ok: true, result: await accounts() })
       case 'signAndSend': {
@@ -62,12 +87,38 @@ async function handleProvider(msg: ProviderRequest, sendResponse: (r: unknown) =
 }
 
 function handlePopup(msg: PopupRequest, sendResponse: (r: PopupResponse) => void) {
-  if (msg.kind === 'getSignRequest') {
-    const p = pending.get(msg.id)
-    return sendResponse(p ? { kind: 'signRequest', request: p.request } : { kind: 'notFound' })
+  switch (msg.kind) {
+    case 'getSignRequest': {
+      const p = pending.get(msg.id)
+      return sendResponse(p ? { kind: 'signRequest', request: p.request } : { kind: 'notFound' })
+    }
+    case 'decide':
+      void finalize(msg.id, msg.approve, msg.signedPsbt).then((result) => sendResponse({ kind: 'decided', result }))
+      return
+    case 'getConnectRequest': {
+      const p = pendingConnect.get(msg.id)
+      return sendResponse(p ? { kind: 'connectRequest', request: p.request } : { kind: 'notFound' })
+    }
+    case 'decideConnect': {
+      const p = pendingConnect.get(msg.id)
+      if (p) {
+        pendingConnect.delete(msg.id)
+        p.settle(msg.approve)
+      }
+      return sendResponse({ kind: 'connectDecided', approved: msg.approve })
+    }
   }
-  // decide
-  void finalize(msg.id, msg.approve, msg.signedPsbt).then((result) => sendResponse({ kind: 'decided', result }))
+}
+
+// Open the connect-approval window and resolve when the user decides. The dApp's
+// connect() promise is settled via `pendingConnect`.
+function requestConnect(id: string, origin: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    pendingConnect.set(id, { request: { id, origin }, settle: resolve })
+    void openApprovalWindow(id, 'connect').then((winId) => {
+      if (winId != null) connectWindows.set(winId, id)
+    })
+  })
 }
 
 // Build the verified SignRequest, open the approval window, and resolve when the
@@ -140,13 +191,15 @@ async function finalize(id: string, approve: boolean, signedPsbt?: string): Prom
   return result
 }
 
-async function openApprovalWindow(id: string): Promise<void> {
-  await chrome.windows.create({
-    url: chrome.runtime.getURL(`index.html?id=${encodeURIComponent(id)}`),
+async function openApprovalWindow(id: string, kind?: 'connect'): Promise<number | undefined> {
+  const k = kind ? `&kind=${kind}` : ''
+  const win = await chrome.windows.create({
+    url: chrome.runtime.getURL(`index.html?id=${encodeURIComponent(id)}${k}`),
     type: 'popup',
     width: 400,
     height: 640,
   })
+  return win.id
 }
 
 // --- connected-origin allow-list (drives the trust pill / recognized branch) ---
@@ -158,6 +211,11 @@ async function markConnected(origin: string): Promise<void> {
 }
 
 async function accounts(): Promise<string[]> {
-  // TODO (M3/M4): return the wallet's address(es) once keys + read path exist.
-  return []
+  // Derive the funding address from the persisted descriptor (public — no seed
+  // needed in the worker). Empty if no wallet has been set up yet.
+  try {
+    return [await sdk.getAddress()]
+  } catch {
+    return []
+  }
 }

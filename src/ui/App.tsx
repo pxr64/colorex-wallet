@@ -4,6 +4,7 @@ import { Lock } from './screens/Lock'
 import { Onboarding } from './screens/Onboarding'
 import { Home } from './screens/Home'
 import { SignScreen } from './screens/SignScreen'
+import { ConnectScreen } from './screens/ConnectScreen'
 import { isUnlocked, lock as lockWallet, walletExists } from '../wallet/store'
 
 type Route = 'lock' | 'onboarding' | 'home' | 'sign'
@@ -13,7 +14,9 @@ type Route = 'lock' | 'onboarding' | 'home' | 'sign'
 //  • opened normally → the wallet. The seed lives in memory only, so each open
 //    starts locked (or at onboarding if no encrypted vault exists yet).
 export function App() {
-  const approvalId = new URLSearchParams(window.location.search).get('id')
+  const params = new URLSearchParams(window.location.search)
+  const approvalId = params.get('id')
+  const approvalKind = params.get('kind') // 'connect' for connection approvals
   const [route, setRoute] = useState<Route | null>(null)
   // The approval window is a fresh context — it must be unlocked here to sign
   // (the seed is never shared from the main popup).
@@ -34,7 +37,13 @@ export function App() {
     if (!approvalUnlocked) {
       return shell(<Lock onUnlock={() => setApprovalUnlocked(true)} onSetup={() => undefined} />)
     }
-    return shell(<SignScreen requestId={approvalId} />)
+    return shell(
+      approvalKind === 'connect' ? (
+        <ConnectScreen requestId={approvalId} />
+      ) : (
+        <SignScreen requestId={approvalId} />
+      ),
+    )
   }
 
   let screen: ReactNode
