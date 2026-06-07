@@ -2,11 +2,12 @@
 // It can't reach the worker directly, so it postMessages to the content script,
 // which relays to the background worker and posts the response back.
 
-import type { SignAndSendIntent } from '../worker/messages'
+import type { ProviderBalances, SignAndSendIntent } from '../worker/messages'
 
 interface ColorexProvider {
   connect(): Promise<{ connected: boolean }>
   getAccounts(): Promise<string[]>
+  getBalances(): Promise<ProviderBalances>
   signPsbt(psbtBase64: string): Promise<string>
   signAndSend(intent: SignAndSendIntent): Promise<{ txid: string; consignment?: string }>
 }
@@ -36,6 +37,7 @@ function call(kind: string, extra: Record<string, unknown> = {}): Promise<unknow
 const provider: ColorexProvider = {
   connect: () => call('connect', { origin: window.location.origin }) as Promise<{ connected: boolean }>,
   getAccounts: () => call('getAccounts') as Promise<string[]>,
+  getBalances: () => call('getBalances') as Promise<ProviderBalances>,
   signPsbt: (psbtBase64) => call('signPsbt', { psbtBase64 }) as Promise<string>,
   signAndSend: (intent) =>
     call('signAndSend', { intent }) as Promise<{ txid: string; consignment?: string }>,

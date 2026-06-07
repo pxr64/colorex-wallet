@@ -13,7 +13,14 @@ import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
 import { decodePsbt } from '../wallet/store'
 import type { SignRequest, SignResult } from '../types/sign-request'
-import type { ConnectRequest, PopupRequest, PopupResponse, ProviderRequest, SignAndSendIntent } from './messages'
+import type {
+  ConnectRequest,
+  PopupRequest,
+  PopupResponse,
+  ProviderBalances,
+  ProviderRequest,
+  SignAndSendIntent,
+} from './messages'
 
 // The wallet is a wallet-agnostic SIGNER. It does NOT talk to the Colorex broker —
 // the dApp orchestrates the swap (RFQ → accept) and hands us the maker's PSBT; we
@@ -70,6 +77,8 @@ async function handleProvider(msg: ProviderRequest, sendResponse: (r: unknown) =
       }
       case 'getAccounts':
         return sendResponse({ id: msg.id, ok: true, result: await accounts() })
+      case 'getBalances':
+        return sendResponse({ id: msg.id, ok: true, result: await balances() })
       case 'signAndSend': {
         const result = await signAndSend(msg.id, msg.intent)
         return sendResponse({ id: msg.id, ok: result.ok, result, error: result.ok ? undefined : result.error })
@@ -218,4 +227,28 @@ async function accounts(): Promise<string[]> {
   } catch {
     return []
   }
+}
+
+// BTC + RGB balances for the dApp's inventory. Each read is guarded so a partial
+// SDK (e.g. a not-yet-synced wallet) yields zeros/empty rather than throwing.
+async function balances(): Promise<ProviderBalances> {
+  let btc = { spendableSats: 0, totalSats: 0 }
+  try {
+    btc = await sdk.getBtcBalance()
+  } catch {
+    /* no wallet / not synced */
+  }
+  let assets: ProviderBalances['assets'] = []
+  try {
+    assets = (await sdk.listAssets()).map((a) => ({
+      contractId: a.assetId,
+      ticker: a.ticker,
+      precision: a.precision,
+      spendable: a.spendable,
+      total: a.total,
+    }))
+  } catch {
+    /* no assets / not synced */
+  }
+  return { btc, assets }
 }

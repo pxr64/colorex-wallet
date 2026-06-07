@@ -23,8 +23,16 @@ export interface SignAndSendIntent {
 export type ProviderRequest =
   | { id: string; kind: 'connect'; origin: string }
   | { id: string; kind: 'getAccounts' }
+  | { id: string; kind: 'getBalances' }
   | { id: string; kind: 'signAndSend'; intent: SignAndSendIntent }
   | { id: string; kind: 'signPsbt'; psbtBase64: string }
+
+/** BTC + RGB balances the dApp reads to render inventory. Amounts are base units
+ *  (sats for BTC; the asset's base units at `precision` for RGB). */
+export interface ProviderBalances {
+  btc: { spendableSats: number; totalSats: number }
+  assets: { contractId: string; ticker: string; precision: number; spendable: number; total: number }[]
+}
 
 /** worker → page (relayed back) */
 export type ProviderResponse =
