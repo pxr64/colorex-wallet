@@ -4,12 +4,12 @@
 // taproot signPsbt are still pending wasm work.
 
 import {
+  btcFundingSats,
   createInvoice,
   fundingAddress,
   importAsset,
   listAssets as storeListAssets,
   openStock,
-  walletSnapshot,
 } from '../wallet/store'
 import type { SignInput } from '../types/sign-request'
 import type { AssetBalance, BitcoinNetworkName, ReceiveInvoice, WalletSdk } from './wallet-sdk'
@@ -29,10 +29,10 @@ export class StoreWalletSdk implements WalletSdk {
   }
 
   async getBtcBalance(): Promise<{ spendableSats: number; totalSats: number }> {
-    // Esplora scan over the wallet's owned addresses (no confirmed/unconfirmed
-    // split yet — spendable == total).
-    const { btcSats } = await walletSnapshot(this.network)
-    return { spendableSats: btcSats, totalSats: btcSats }
+    // Balance at the keychain-0 funding address — what a swap can actually spend
+    // (matches the address the maker scans). No confirmed/unconfirmed split yet.
+    const sats = await btcFundingSats(this.network)
+    return { spendableSats: sats, totalSats: sats }
   }
 
   async listAssets(): Promise<AssetBalance[]> {

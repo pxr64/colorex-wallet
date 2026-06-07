@@ -250,13 +250,24 @@ export async function createInvoice(contractId: string, amount: number, network 
 }
 
 /** A keychain-0 BTC address — the wallet's funding address for a swap (the maker
- *  scans it for the taker's BTC inputs). */
+ *  scans it for the taker's BTC inputs). keychain-0 is the BTC payment leg;
+ *  keychain-10 is for RGB. This is THE BTC deposit address. */
 export async function fundingAddress(network = 'signet'): Promise<string | undefined> {
   const descriptor = await getDescriptor()
   if (!descriptor) return undefined
   await rgbReady()
   const addrs = JSON.parse(wasm.derive_addresses(descriptor, network, 0, 1)) as string[]
   return addrs[0]
+}
+
+/** Spendable BTC at the funding address (keychain-0). This is the balance a swap
+ *  can actually use — so it matches what the maker scans, unlike a wallet-wide
+ *  sum that would include keychain-10 RGB-anchor dust. */
+export async function btcFundingSats(network = 'signet'): Promise<number> {
+  const addr = await fundingAddress(network)
+  if (!addr) return 0
+  const utxos = await addressUtxos(addr).catch(() => [] as Utxo[])
+  return utxos.reduce((sum, u) => sum + (u.value || 0), 0)
 }
 
 function b64ToBytes(b64: string): Uint8Array {
