@@ -5,7 +5,7 @@ import { Onboarding } from './screens/Onboarding'
 import { Home } from './screens/Home'
 import { SignScreen } from './screens/SignScreen'
 import { ConnectScreen } from './screens/ConnectScreen'
-import { isUnlocked, lock as lockWallet, walletExists } from '../wallet/store'
+import { lock as lockWallet, restoreSession, walletExists } from '../wallet/store'
 
 type Route = 'lock' | 'onboarding' | 'home' | 'sign'
 
@@ -18,12 +18,18 @@ export function App() {
   const approvalId = params.get('id')
   const approvalKind = params.get('kind') // 'connect' for connection approvals
   const [route, setRoute] = useState<Route | null>(null)
-  // The approval window is a fresh context — it must be unlocked here to sign
-  // (the seed is never shared from the main popup).
-  const [approvalUnlocked, setApprovalUnlocked] = useState(() => isUnlocked())
+  // Each popup/approval window is a fresh context, but the unlocked session is
+  // mirrored in chrome.storage.session — so restore it on open instead of
+  // forcing a re-unlock every time the popup closes.
+  const [approvalUnlocked, setApprovalUnlocked] = useState(false)
 
   useEffect(() => {
-    void walletExists().then((exists) => setRoute(exists ? 'lock' : 'onboarding'))
+    void (async () => {
+      const exists = await walletExists()
+      const unlocked = exists ? await restoreSession() : false
+      setApprovalUnlocked(unlocked)
+      setRoute(exists ? (unlocked ? 'home' : 'lock') : 'onboarding')
+    })()
   }, [])
 
   const go = (r: Route) => setRoute(r)

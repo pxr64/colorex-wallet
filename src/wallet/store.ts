@@ -57,8 +57,53 @@ async function kvPutAll(entries: Record<string, unknown>): Promise<void> {
 type Stock = InstanceType<typeof wasm.RgbStock>
 let stock: Stock | null = null
 
-// The decrypted mnemonic — held in memory ONLY while unlocked; never persisted.
+// The decrypted mnemonic — held in memory while unlocked. Also mirrored into
+// chrome.storage.session (memory-only, cleared when the browser/extension shuts
+// down — never written to disk) so the unlocked session survives popup
+// close/reopen instead of forcing a re-unlock every time. Auto-locks after
+// AUTO_LOCK_MS of not being restored.
 let unlockedMnemonic: string | null = null
+
+const SESSION_KEY = 'unlocked'
+const AUTO_LOCK_MS = 30 * 60 * 1000 // 30 minutes
+
+interface SessionEntry {
+  mnemonic: string
+  expiresAt: number
+}
+
+async function persistSession(mnemonic: string): Promise<void> {
+  try {
+    const entry: SessionEntry = { mnemonic, expiresAt: Date.now() + AUTO_LOCK_MS }
+    await chrome.storage.session.set({ [SESSION_KEY]: entry })
+  } catch {
+    /* session storage unavailable — fall back to in-memory only */
+  }
+}
+
+/** Restore an unlocked session persisted across popup opens. Returns true if a
+ *  valid, non-expired session was found (and refreshes its sliding expiry). */
+export async function restoreSession(): Promise<boolean> {
+  if (unlockedMnemonic) return true
+  let entry: SessionEntry | undefined
+  try {
+    entry = (await chrome.storage.session.get(SESSION_KEY))[SESSION_KEY] as SessionEntry | undefined
+  } catch {
+    return false
+  }
+  if (!entry || entry.expiresAt < Date.now()) {
+    try {
+      await chrome.storage.session.remove(SESSION_KEY)
+    } catch {
+      /* ignore */
+    }
+    return false
+  }
+  unlockedMnemonic = entry.mnemonic
+  await openStock()
+  await persistSession(entry.mnemonic) // sliding window on each restore
+  return true
+}
 
 /** Whether an (encrypted) wallet already exists on this device. */
 export async function walletExists(): Promise<boolean> {
@@ -69,9 +114,10 @@ export function isUnlocked(): boolean {
   return unlockedMnemonic !== null
 }
 
-/** Clear the in-memory seed (e.g. on Lock or popup close). */
+/** Clear the in-memory seed AND the persisted session (explicit Lock). */
 export function lock(): void {
   unlockedMnemonic = null
+  void chrome.storage.session.remove(SESSION_KEY)
 }
 
 /** The unlocked mnemonic, for key derivation / signing. Null while locked. */
@@ -87,6 +133,7 @@ export async function unlock(password: string): Promise<boolean> {
   try {
     unlockedMnemonic = await decryptSeed(vault, password)
     await openStock()
+    await persistSession(unlockedMnemonic)
     return true
   } catch {
     return false
