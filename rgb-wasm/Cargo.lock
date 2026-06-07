@@ -1136,6 +1136,7 @@ name = "rgb-wasm"
 version = "0.0.0"
 dependencies = [
  "amplify",
+ "base64",
  "bp-std",
  "bp-wallet",
  "getrandom 0.2.17",

@@ -21,7 +21,7 @@ use bpwallet::Wallet;
 use rgb::containers::{ConsignmentExt, FileContent, Kit, Transfer, ValidConsignment};
 use rgb::contract::FilterIncludeAll;
 use rgb::invoice::{Beneficiary, Pay2Vout, RgbInvoiceBuilder, XChainNet};
-use rgb::persistence::{MemIndex, MemStash, MemState, StashReadProvider, Stock};
+use rgb::persistence::{MemIndex, MemStash, MemState, StashReadProvider, StateReadProvider, Stock};
 use rgb::stl::AssetSpec;
 use rgb::validation::{
     ResolveWitness, ValidationConfig, Validity, WitnessResolverError, WitnessStatus,
@@ -374,10 +374,48 @@ impl RgbStock {
         self.stock
             .accept_transfer(validated, &resolver)
             .map_err(|e| JsError::new(&format!("accept_transfer: {e}")))?;
+        // Re-derive state across ALL of the stock's witnesses, not just this
+        // consignment's. `update_witnesses` walks every known witness, so a resolver
+        // scoped to one consignment would report every OTHER asset's witness as
+        // Unresolved → Archived — silently dropping previously-imported assets.
+        // `full_resolver` seeds each known witness with its current ord + stashed tx
+        // and overlays only this consignment's fresh ords on top.
+        let resolver = self.full_resolver(&ords, cn)?;
         self.stock
             .update_witnesses(resolver, 0, vec![])
             .map_err(|e| JsError::new(&format!("update_witnesses: {e}")))?;
         Ok(())
+    }
+
+    /// Re-derive contract state from fresh witness ords WITHOUT re-accepting a
+    /// consignment — the import queue's promote (Tentative→Mined) and revert
+    /// (→Archived) primitive. `ords_json` is `[{ "txid", "height"?, "time"?,
+    /// "archived"? }]` with OVERLAY semantics: only listed witnesses change; every
+    /// other known witness keeps its current ord, so promoting/reverting one asset
+    /// never disturbs the rest. An `archived` witness (its tx dropped/replaced) is
+    /// excluded from state, dropping its allocation. `save()` afterward to persist.
+    pub fn update_witnesses(&mut self, ords_json: &str, network: &str) -> Result<(), JsError> {
+        let cn = chain_net(network)?;
+        let overlay = parse_ords(ords_json)?;
+        let resolver = self.full_resolver(&overlay, cn)?;
+        self.stock
+            .update_witnesses(resolver, 0, vec![])
+            .map_err(|e| JsError::new(&format!("update_witnesses: {e}")))?;
+        Ok(())
+    }
+
+    /// Every witness txid the stock knows, as a JSON array of hex strings. JS fetches
+    /// each one's chain status (Esplora) and feeds it back via `update_witnesses` —
+    /// a wallet-wide witness sync (promote mined, revert dropped) in one pass.
+    pub fn stock_witness_ids(&self) -> Result<String, JsError> {
+        let ids: Vec<serde_json::Value> = self
+            .stock
+            .as_state_provider()
+            .witnesses()
+            .keys()
+            .map(|t| serde_json::Value::String(t.to_string()))
+            .collect();
+        Ok(serde_json::Value::Array(ids).to_string())
     }
 
     /// Build a witness-vout RGB receive invoice for `amount` of `contract_id`, to
@@ -414,6 +452,29 @@ impl RgbStock {
 
 // Non-exported helpers + the per-asset aggregation.
 impl RgbStock {
+    /// A [`ResolveWitness`] covering EVERY witness the stock currently knows: each is
+    /// seeded with its current stored ord and its tx (from the stash), then `overlay`
+    /// replaces the ord for the witnesses the caller has fresh chain data on. This is
+    /// what keeps `update_witnesses` from archiving the witnesses it wasn't told
+    /// about (the default JS resolver returns Unresolved → Archived for those).
+    fn full_resolver(&self, overlay: &HashMap<Txid, WitnessOrd>, cn: ChainNet) -> Result<JsResolver, JsError> {
+        let mut statuses: HashMap<Txid, WitnessStatus> = HashMap::new();
+        for (txid, current) in self.stock.as_state_provider().witnesses().iter() {
+            let ord = overlay.get(txid).cloned().unwrap_or_else(|| current.clone());
+            let status = match self.stock.as_stash_provider().witness(*txid) {
+                // Witness-vout swaps always carry the full tx; a txid-only witness
+                // (no tx) can't be asserted valid → leave Unresolved (→ Archived).
+                Ok(sw) => match sw.public.tx() {
+                    Some(tx) => WitnessStatus::Resolved(tx.clone(), ord),
+                    None => WitnessStatus::Unresolved,
+                },
+                Err(_) => WitnessStatus::Unresolved,
+            };
+            statuses.insert(*txid, status);
+        }
+        Ok(JsResolver { statuses, chain_net: cn })
+    }
+
     fn collect_assets(&self, owned: Option<&std::collections::HashSet<String>>) -> Result<String, JsError> {
         let contracts: Vec<_> = self
             .stock
@@ -493,14 +554,22 @@ fn parse_ords(json: &str) -> Result<HashMap<Txid, WitnessOrd>, JsError> {
         let txid = Txid::from_str(txid_str).map_err(|e| JsError::new(&format!("bad txid: {e}")))?;
         let height = e.get("height").and_then(|v| v.as_u64());
         let time = e.get("time").and_then(|v| v.as_i64());
-        let ord = match (height, time) {
-            (Some(h), Some(t)) if h > 0 => {
-                let height = NonZeroU32::new(h as u32).ok_or_else(|| JsError::new("bad height"))?;
-                WitnessOrd::Mined(
-                    WitnessPos::bitcoin(height, t).ok_or_else(|| JsError::new("bad witness pos"))?,
-                )
+        // `archived: true` flags a witness that's been dropped/replaced (its tx is
+        // gone from mempool + chain) — Archived excludes it from state, reverting
+        // the allocation. Otherwise height+time → Mined, else Tentative (mempool).
+        let archived = e.get("archived").and_then(|v| v.as_bool()).unwrap_or(false);
+        let ord = if archived {
+            WitnessOrd::Archived
+        } else {
+            match (height, time) {
+                (Some(h), Some(t)) if h > 0 => {
+                    let height = NonZeroU32::new(h as u32).ok_or_else(|| JsError::new("bad height"))?;
+                    WitnessOrd::Mined(
+                        WitnessPos::bitcoin(height, t).ok_or_else(|| JsError::new("bad witness pos"))?,
+                    )
+                }
+                _ => WitnessOrd::Tentative,
             }
-            _ => WitnessOrd::Tentative,
         };
         ords.insert(txid, ord);
     }

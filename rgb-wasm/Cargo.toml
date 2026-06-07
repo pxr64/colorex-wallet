@@ -6,7 +6,7 @@ license = "MIT"
 description = "WASM boundary over the RGB protocol core (rgb-api) for the Colorex browser wallet."
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wasm-bindgen = "0.2"
@@ -22,6 +22,9 @@ bp-std = { version = "=0.11.1-alpha.2", default-features = false, features = ["c
 bp-wallet = { version = "=0.11.1-alpha.2", default-features = false, features = ["signers", "client-side-validation"] }
 # wasm randomness backend for the transitive getrandom 0.2 in the RGB tree.
 getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+base64 = "0.22"
 
 [profile.release]
 opt-level = "s"
