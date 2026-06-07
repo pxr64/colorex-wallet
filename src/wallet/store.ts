@@ -62,6 +62,12 @@ let stock: Stock | null = null
 // down — never written to disk) so the unlocked session survives popup
 // close/reopen instead of forcing a re-unlock every time. Auto-locks after
 // AUTO_LOCK_MS of not being restored.
+//
+// SECURITY: this persists the RAW mnemonic in session storage, readable by any
+// trusted extension context while unlocked. It's memory-only + trusted-contexts
+// only, but not the most secure option. Planned hardening (persist a derived key
+// instead of the mnemonic, idle-based/shorter auto-lock, worker-confined signing)
+// is tracked in colorex-wallet#2.
 let unlockedMnemonic: string | null = null
 
 const SESSION_KEY = 'unlocked'
