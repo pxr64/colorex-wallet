@@ -16,18 +16,24 @@ use std::str::FromStr;
 
 use amplify::confinement::Confined;
 use bpstd::psbt::Psbt;
-use bpstd::{Address, Keychain, Network, ScriptPubkey, Txid, XpubDerivable};
-use bpwallet::Wallet;
+use bpstd::{
+    Address, DerivedAddr, Keychain, LockTime, Network, Outpoint, Sats, ScriptPubkey, Tx, TxVer,
+    Txid, XpubDerivable,
+};
+use bpwallet::{
+    Descriptor, Indexer, Layer2, MayError, MiningInfo, Party, TxDebit, TxStatus, Wallet,
+    WalletCache, WalletDescr, WalletTx,
+};
 use rgb::containers::{ConsignmentExt, FileContent, Kit, Transfer, ValidConsignment};
 use rgb::contract::FilterIncludeAll;
-use rgb::invoice::{Beneficiary, Pay2Vout, RgbInvoiceBuilder, XChainNet};
+use rgb::invoice::{Beneficiary, Pay2Vout, RgbInvoice, RgbInvoiceBuilder, XChainNet};
 use rgb::persistence::{MemIndex, MemStash, MemState, StashReadProvider, StateReadProvider, Stock};
 use rgb::stl::AssetSpec;
 use rgb::validation::{
     ResolveWitness, ValidationConfig, Validity, WitnessResolverError, WitnessStatus,
 };
 use rgb::vm::{WitnessOrd, WitnessPos};
-use rgb::{ChainNet, ContractId, RgbDescr, RgbKeychain, StateType, TapretKey};
+use rgb::{ChainNet, ContractId, RgbDescr, RgbKeychain, RgbWallet, StateType, TapretKey, TransferParams};
 use strict_encoding::{StrictDeserialize, StrictSerialize};
 use wasm_bindgen::prelude::*;
 
@@ -448,10 +454,77 @@ impl RgbStock {
         }
         Ok(builder.finish().to_string())
     }
+
+    /// Build the taker's SELL consignment: an RGB transfer of the invoiced amount
+    /// to the maker's `invoice`, returning the strict-encoded consignment bytes
+    /// (the dApp base64s + POSTs them to the broker; the maker re-anchors the RGB
+    /// into the swap tx). Mirrors `rfq-rgb`'s `create_transfer_to_invoice`
+    /// (`wallet.pay` → keep the `Transfer`, DISCARD the PSBT).
+    ///
+    /// `utxos_json` is the wallet's own UTXO set (Esplora-scanned in JS):
+    /// `[{ "txid", "vout", "value", "keychain", "index" }]`. `wallet.pay` needs a
+    /// hydrated bp-wallet to (a) find the RGB-bearing seal UTXO via the contract
+    /// filter and (b) fund the throwaway witness tx + change — but wasm has no
+    /// synced wallet cache, so we inject the JS UTXOs through [`JsUtxoIndexer`].
+    ///
+    /// Read-only against the live stock: we pay on a throwaway CLONE, so an
+    /// abandoned/rejected swap never marks the taker's RGB spent in the wallet.
+    /// The returned `Transfer` is self-contained (full genesis→…→transition graph),
+    /// so dropping the cloned stock loses nothing.
+    pub fn create_transfer(
+        &self,
+        descriptor: &str,
+        invoice: &str,
+        utxos_json: &str,
+        fee: u64,
+        network: &str,
+    ) -> Result<Vec<u8>, JsError> {
+        let invoice = RgbInvoice::from_str(invoice)
+            .map_err(|e| JsError::new(&format!("invalid RGB invoice: {e:?}")))?;
+        let net = btc_network(network)?;
+        let xpub = XpubDerivable::from_str(descriptor)
+            .map_err(|e| JsError::new(&format!("parse descriptor: {e}")))?;
+        let rgb_descr: RgbDescr = TapretKey::from(xpub).into();
+        let mut wallet: Wallet<XpubDerivable, RgbDescr> = Wallet::new_layer1(rgb_descr, net);
+
+        // Resolve each JS UTXO to its on-chain DerivedAddr (addr + terminal) by
+        // walking the descriptor's own keychain so the cache carries the right
+        // scriptPubkey + derivation for PSBT input construction.
+        let indexer = JsUtxoIndexer::from_json(&wallet, utxos_json)?;
+        // Hydrate the (empty) wallet cache from the JS UTXOs — `update` hands the
+        // indexer `&mut WalletCache` (the only public way in to L1 cache).
+        if let Some(errors) = wallet.update(&indexer).err {
+            return Err(JsError::new(&format!("hydrate wallet cache: {errors:?}")));
+        }
+
+        // Pay on a throwaway clone so the live stock stays pristine on a failed swap.
+        let stock = self.clone_stock()?;
+        let mut rgb_wallet = RgbWallet::new(stock, wallet);
+        // `min_amount` is the witness-vout beneficiary dust floor; maker swap
+        // invoices use blinded seals (no witness vout), so 546 is a safe nominal.
+        let params = TransferParams::with(Sats(fee), Sats(546));
+        let (_psbt, _meta, transfer) = rgb_wallet
+            .pay(&invoice, params)
+            .map_err(|e| JsError::new(&format!("pay: {e}")))?;
+
+        let mut bytes = Vec::new();
+        transfer
+            .save(&mut bytes)
+            .map_err(|e| JsError::new(&format!("serialize consignment: {e}")))?;
+        Ok(bytes)
+    }
 }
 
 // Non-exported helpers + the per-asset aggregation.
 impl RgbStock {
+    /// A deep clone of the live stock via strict (de)serialization of its three
+    /// providers — the same round-trip `save`/`load` use. `Stock` isn't `Clone`,
+    /// and we need a throwaway to `pay` against without mutating the wallet.
+    fn clone_stock(&self) -> Result<WalletStock, JsError> {
+        let snap = self.save()?;
+        Ok(Stock::with(de(&snap.stash)?, de(&snap.state)?, de(&snap.index)?))
+    }
+
     /// A [`ResolveWitness`] covering EVERY witness the stock currently knows: each is
     /// seeded with its current stored ord and its tx (from the stash), then `overlay`
     /// replaces the ord for the witnesses the caller has fresh chain data on. This is
@@ -600,5 +673,120 @@ impl ResolveWitness for JsResolver {
         } else {
             Err(WitnessResolverError::WrongChainNet)
         }
+    }
+}
+
+/// A one-shot [`Indexer`] that injects a JS-supplied UTXO set into a wallet's
+/// cache, standing in for the network sync wasm can't do. Only `update` is real:
+/// it receives `&mut WalletCache` — the sole public path into the L1 cache — and
+/// writes a minimal `WalletTx` per UTXO txid, enough for coin selection + PSBT
+/// input construction (outpoint, value, owned scriptPubkey, derivation). The
+/// throwaway witness tx `wallet.pay` builds is funded from these.
+struct JsUtxoIndexer {
+    // txid -> [(vout, value, derived_addr)]; one WalletTx is synthesized per txid.
+    txs: HashMap<Txid, Vec<(u32, Sats, DerivedAddr)>>,
+}
+
+impl JsUtxoIndexer {
+    /// Parse `[{ txid, vout, value, keychain, index }]` and resolve each entry's
+    /// own `DerivedAddr` (addr + terminal) by walking the wallet's keychain, so the
+    /// cache carries the scriptPubkey + derivation the PSBT input needs.
+    fn from_json(
+        wallet: &Wallet<XpubDerivable, RgbDescr>,
+        utxos_json: &str,
+    ) -> Result<Self, JsError> {
+        let val: serde_json::Value =
+            serde_json::from_str(utxos_json).map_err(|e| JsError::new(&format!("parse utxos: {e}")))?;
+        let arr = val.as_array().ok_or_else(|| JsError::new("utxos must be a JSON array"))?;
+        let mut txs: HashMap<Txid, Vec<(u32, Sats, DerivedAddr)>> = HashMap::new();
+        for e in arr {
+            let txid_str = e
+                .get("txid")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| JsError::new("utxo entry missing txid"))?;
+            let txid = Txid::from_str(txid_str).map_err(|e| JsError::new(&format!("bad txid: {e}")))?;
+            let vout = e
+                .get("vout")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| JsError::new("utxo entry missing vout"))? as u32;
+            let value = e
+                .get("value")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| JsError::new("utxo entry missing value"))?;
+            let keychain = e.get("keychain").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+            let index = e.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let derived = wallet
+                .addresses(Keychain::from(keychain))
+                .nth(index)
+                .ok_or_else(|| JsError::new("address derivation produced no address"))?;
+            txs.entry(txid).or_default().push((vout, Sats(value), derived));
+        }
+        Ok(JsUtxoIndexer { txs })
+    }
+}
+
+impl Indexer for JsUtxoIndexer {
+    type Error = String;
+
+    fn create<K, D: Descriptor<K>, L2: Layer2>(
+        &self,
+        _descr: &WalletDescr<K, D, L2::Descr>,
+    ) -> MayError<WalletCache<L2::Cache>, Vec<Self::Error>> {
+        // Never reached: callers always `wallet.update(&self)`, which routes to
+        // `update` below against the wallet's existing (empty) cache. `create` would
+        // need to build a `WalletCache` whose constructor is crate-private anyway.
+        unimplemented!("JsUtxoIndexer supports update() only")
+    }
+
+    fn update<K, D: Descriptor<K>, L2: Layer2>(
+        &self,
+        _descr: &WalletDescr<K, D, L2::Descr>,
+        cache: &mut WalletCache<L2::Cache>,
+    ) -> MayError<usize, Vec<Self::Error>> {
+        let mut n = 0usize;
+        for (txid, outs) in &self.txs {
+            let max_vout = outs.iter().map(|(v, _, _)| *v).max().unwrap_or(0);
+            // `outpoint_by` indexes outputs by vout, so the vec must be dense up to
+            // the highest owned vout; gaps get non-wallet placeholders that can't be
+            // coin-selected (their beneficiary isn't `Party::Wallet`).
+            let mut outputs: Vec<TxDebit> = (0..=max_vout)
+                .map(|vout| TxDebit {
+                    outpoint: Outpoint::new(*txid, vout),
+                    beneficiary: Party::Unknown(ScriptPubkey::new()),
+                    value: Sats::ZERO,
+                    spent: None,
+                })
+                .collect();
+            for (vout, value, derived) in outs {
+                let op = Outpoint::new(*txid, *vout);
+                outputs[*vout as usize] = TxDebit {
+                    outpoint: op,
+                    beneficiary: Party::Wallet(*derived),
+                    value: *value,
+                    spent: None,
+                };
+                cache.utxo.insert(op);
+                n += 1;
+            }
+            cache.tx.insert(
+                *txid,
+                WalletTx {
+                    txid: *txid,
+                    status: TxStatus::Mined(MiningInfo::genesis()),
+                    inputs: vec![],
+                    outputs,
+                    fee: Sats::ZERO,
+                    size: 0,
+                    weight: 0,
+                    version: TxVer::V2,
+                    locktime: LockTime::ZERO,
+                },
+            );
+        }
+        MayError::ok(n)
+    }
+
+    fn publish(&self, _tx: &Tx) -> Result<(), Self::Error> {
+        Err("JsUtxoIndexer cannot broadcast".to_owned())
     }
 }

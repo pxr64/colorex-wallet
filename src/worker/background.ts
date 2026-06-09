@@ -11,7 +11,7 @@
 import { assembleSignRequest } from '../colorex/sign-request'
 import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
-import { createInvoice, decodePsbt } from '../wallet/store'
+import { createInvoice, createTransfer, decodePsbt } from '../wallet/store'
 import { drain, enqueue, getQueue, removeItem } from '../wallet/import-queue'
 import type { SignRequest, SignResult } from '../types/sign-request'
 import type {
@@ -28,6 +28,11 @@ import type {
 // decode it (trustless) + sign. Backed by the wasm-native wallet (store) — only
 // create_invoice + taproot signPsbt are still pending.
 const sdk: WalletSdk = new StoreWalletSdk('signet')
+
+// Fee for the taker's throwaway sell-consignment witness tx — mirrors taker-cli's
+// SELL_RGB_FEE_SATS. The PSBT is discarded (the maker re-anchors), so this only
+// has to be coverable by the RGB seal UTXO's bitcoin value (≥546 from the buy).
+const SELL_RGB_FEE_SATS = 200
 
 interface Pending {
   request: SignRequest
@@ -112,10 +117,15 @@ async function handleProvider(msg: ProviderRequest, sendResponse: (r: unknown) =
         const invoice = await createInvoice(msg.contractId, msg.amount, sdk.getNetwork())
         return sendResponse({ id: msg.id, ok: true, result: invoice })
       }
-      case 'buildConsignment':
-        // Sell leg: the taker builds a consignment to the maker's invoice. The
-        // RGB send path isn't in rgb-wasm yet — see colorex-wallet#3.
-        throw new Error('RGB send not implemented yet (rgb-wasm create_consignment pending) — see #3')
+      case 'buildConsignment': {
+        // Sell leg: the taker builds an RGB consignment paying the maker's invoice.
+        // rgb-wasm `create_transfer` scans the wallet's own UTXOs (in `createTransfer`)
+        // to fund the throwaway witness tx; the maker re-anchors the RGB into the
+        // swap tx. 200 sats mirrors taker-cli's SELL_RGB_FEE_SATS (the PSBT is
+        // discarded, so this fee only has to be coverable by the RGB seal UTXO).
+        const consignment = await createTransfer(msg.invoice, SELL_RGB_FEE_SATS, sdk.getNetwork())
+        return sendResponse({ id: msg.id, ok: true, result: consignment })
+      }
       case 'acceptConsignment': {
         // Buy leg, after broadcast: ENQUEUE the maker's consignment (persistent,
         // restart-surviving) rather than a one-shot import — the drain loop accepts

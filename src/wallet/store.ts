@@ -290,6 +290,42 @@ function b64ToBytes(b64: string): Uint8Array {
   return out
 }
 
+function bytesToB64(bytes: Uint8Array): string {
+  let bin = ''
+  for (const b of bytes) bin += String.fromCharCode(b)
+  return btoa(bin)
+}
+
+/** The taker's SELL leg: build an RGB consignment paying the maker's `invoice`,
+ *  returned as base64 (the dApp POSTs it to the broker; the maker validates it and
+ *  re-anchors the RGB into the swap tx). `create_transfer` needs a hydrated UTXO
+ *  set — wasm has no synced wallet — so we Esplora-scan the wallet's own UTXOs
+ *  (keychains 0/1/10), each tagged with its (keychain, index) derivation. The PSBT
+ *  it builds is discarded; read-only against the stock, so nothing to persist. */
+export async function createTransfer(
+  invoice: string,
+  fee: number,
+  network = 'signet',
+): Promise<string> {
+  const descriptor = await getDescriptor()
+  if (!descriptor) throw new Error('no wallet — set one up first')
+  const s = await openStock()
+  const tagged = await ownedAddresses(network)
+  const lists = await Promise.all(
+    tagged.map((t) =>
+      addressUtxos(t.address)
+        .then((us) =>
+          us.map((u) => ({ txid: u.txid, vout: u.vout, value: u.value, keychain: t.keychain, index: t.index })),
+        )
+        .catch(() => [] as Array<{ txid: string; vout: number; value: number; keychain: number; index: number }>),
+    ),
+  )
+  const utxos = lists.flat()
+  if (utxos.length === 0) throw new Error('no spendable UTXOs to build the transfer')
+  const bytes = s.create_transfer(descriptor, invoice, JSON.stringify(utxos), BigInt(fee), network)
+  return bytesToB64(bytes)
+}
+
 // The wallet's derived addresses across the keychains RGB swaps touch, each
 // tagged with its (keychain, index) so the decoder can tell the signer exactly
 // which input to sign with which key.
