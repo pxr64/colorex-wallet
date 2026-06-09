@@ -13,7 +13,6 @@ export interface SignAndSendIntent {
   psbt: string // maker's partial PSBT (base64), built by the dApp via the broker
   assetId?: string
   amount?: number
-  side?: 'buy' | 'sell'
   quoteId?: string
   makerId?: string
   consignment?: string

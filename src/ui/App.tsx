@@ -34,7 +34,20 @@ export function App() {
 
   const go = (r: Route) => setRoute(r)
   const shell = (children: ReactNode) => (
-    <div className="cxw" style={{ width: POPUP_W, height: POPUP_H, background: T.bg, color: T.ink, fontFamily: T.body, overflow: 'hidden' }}>
+    <div
+      className="cxw"
+      style={{
+        // The approval WINDOW (opened with ?id=) fills its OS window so there's no
+        // border gap regardless of the platform's window frame; the action dropdown
+        // popup uses the fixed design size so Chrome sizes the popup to it.
+        width: approvalId ? '100%' : POPUP_W,
+        height: approvalId ? '100vh' : POPUP_H,
+        background: T.bg,
+        color: T.ink,
+        fontFamily: T.body,
+        overflow: 'hidden',
+      }}
+    >
       {children}
     </div>
   )

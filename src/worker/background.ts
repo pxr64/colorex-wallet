@@ -270,7 +270,10 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
     assetTicker,
     assetPrecision,
     rgbAmountRaw: intent.amount ?? 0,
-    side: intent.side ?? 'buy',
+    // Direction is INFERRED from the wallet's own BTC delta, not trusted from the
+    // dApp: a buy spends BTC for RGB (delta < 0); a sell receives BTC for RGB
+    // (delta >= 0). Only orients the RGB balance-change row's sign.
+    side: decoded.btcDeltaSats < 0 ? 'buy' : 'sell',
   })
 }
 
@@ -306,8 +309,11 @@ async function openApprovalWindow(id: string, kind?: 'connect'): Promise<number 
   const win = await chrome.windows.create({
     url: chrome.runtime.getURL(`index.html?id=${encodeURIComponent(id)}${k}`),
     type: 'popup',
-    width: 400,
-    height: 640,
+    // Matches the design width (POPUP_W=380); the approval shell fills this window
+    // (width/height 100%) so there's no border gap. Extra height covers the OS
+    // title bar so the content area is ~POPUP_H.
+    width: 380,
+    height: 632,
   })
   return win.id
 }

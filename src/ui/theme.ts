@@ -26,7 +26,10 @@ export const T = {
 } as const
 
 export const POPUP_W = 380
-export const POPUP_H = 640
+// Chrome caps extension popups at 600px tall; anything taller is clipped by the
+// window (a pinned footer button becomes unreachable). Stay at the cap so the
+// internal scroll areas handle overflow instead.
+export const POPUP_H = 600
 
 const PRICE_USD: Record<string, number> = {
   tBTC: 64180,

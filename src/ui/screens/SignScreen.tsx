@@ -297,7 +297,7 @@ export function SignScreen({ requestId, onClose }: { requestId: string; onClose?
                         <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', border: `1px solid ${T.hair}`, borderRadius: 9, background: T.bg }}>
                           <div style={{ minWidth: 0, display: 'grid', gap: 1 }}>
                             <span style={{ fontFamily: T.body, fontSize: 11.5, color: T.ink, fontWeight: 500 }}>{r.label}</span>
-                            <Mono style={{ fontSize: 9.5, color: T.faint }}>{r.detail}</Mono>
+                            <Mono style={{ fontSize: 9.5, color: T.faint, display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.detail}</Mono>
                           </div>
                           <Mono style={{ marginLeft: 'auto', fontSize: 10.5, color: T.inkSoft }}><span className="cxw-tab" style={{ whiteSpace: 'nowrap' }}>{r.amount}</span></Mono>
                         </div>
