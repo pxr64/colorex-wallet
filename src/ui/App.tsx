@@ -40,9 +40,11 @@ export function App() {
   )
 
   if (approvalId) {
-    // Connect needs no seed — the address comes from the public descriptor and
+    // Connect needs no key — the address comes from the public descriptor and
     // approving only records the origin — so don't make the user unlock for it.
-    // Signing does need the unlocked seed, so it stays gated.
+    // Signing stays gated on unlock: the user authenticates here, which also puts
+    // the derived account key in the shared session so the WORKER can sign (the
+    // approval window itself never holds a key — worker-confined signing, #2).
     if (approvalKind === 'connect') {
       return shell(<ConnectScreen requestId={approvalId} />)
     }

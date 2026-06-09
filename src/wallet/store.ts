@@ -4,7 +4,7 @@
 // descriptor so the wallet can list assets and derive addresses across reopens.
 
 import { rgbReady, wasm } from './rgb'
-import { generateWallet, type GeneratedWallet } from './keys'
+import { accountXprvFromMnemonic, generateWallet, type GeneratedWallet } from './keys'
 import { decryptSeed, encryptSeed, type Vault } from './vault'
 import { addressUtxos, witnessOrds, type Utxo } from './esplora'
 import type { DecodedPsbt } from '../colorex/sign-request'
@@ -70,40 +70,41 @@ async function kvPutAll(entries: Record<string, unknown>): Promise<void> {
 type Stock = InstanceType<typeof wasm.RgbStock>
 let stock: Stock | null = null
 
-// The decrypted mnemonic — held in memory while unlocked. Also mirrored into
-// chrome.storage.session (memory-only, cleared when the browser/extension shuts
-// down — never written to disk) so the unlocked session survives popup
-// close/reopen instead of forcing a re-unlock every time. Auto-locks after
-// AUTO_LOCK_MS of not being restored.
+// The unlocked ACCOUNT XPRV (BIP-86 `m/86'/1'/0'`) — held in memory while
+// unlocked and mirrored into chrome.storage.session (memory-only, cleared on
+// browser/extension shutdown — never written to disk) so the session survives
+// popup close/reopen without a re-unlock. Sliding AUTO_LOCK_MS expiry + idle/OS-
+// lock auto-lock (driven from the worker).
 //
-// SECURITY: this persists the RAW mnemonic in session storage, readable by any
-// trusted extension context while unlocked. It's memory-only + trusted-contexts
-// only, but not the most secure option. Planned hardening (persist a derived key
-// instead of the mnemonic, idle-based/shorter auto-lock, worker-confined signing)
-// is tracked in colorex-wallet#2.
-let unlockedMnemonic: string | null = null
+// SECURITY (#2): the RAW MNEMONIC is NEVER cached here — it stays only in the
+// encrypted vault (the recovery copy). A leak of the hot session therefore exposes
+// THIS account's signing key (can drain this wallet) but not the portable,
+// cross-wallet recovery phrase. The mnemonic materializes only transiently, in the
+// context where the password was typed, during unlock/create — then is dropped.
+let unlockedXprv: string | null = null
 
 const SESSION_KEY = 'unlocked'
-const AUTO_LOCK_MS = 30 * 60 * 1000 // 30 minutes
+const AUTO_LOCK_MS = 15 * 60 * 1000 // 15 minutes (sliding; idle auto-lock backstop)
 
 interface SessionEntry {
-  mnemonic: string
+  xprv: string
   expiresAt: number
 }
 
-async function persistSession(mnemonic: string): Promise<void> {
+async function persistSession(xprv: string): Promise<void> {
   try {
-    const entry: SessionEntry = { mnemonic, expiresAt: Date.now() + AUTO_LOCK_MS }
+    const entry: SessionEntry = { xprv, expiresAt: Date.now() + AUTO_LOCK_MS }
     await chrome.storage.session.set({ [SESSION_KEY]: entry })
   } catch {
     /* session storage unavailable — fall back to in-memory only */
   }
 }
 
-/** Restore an unlocked session persisted across popup opens. Returns true if a
- *  valid, non-expired session was found (and refreshes its sliding expiry). */
+/** Restore an unlocked session persisted across popup opens / worker restarts.
+ *  Returns true if a valid, non-expired session was found (and refreshes its
+ *  sliding expiry). Loads only the derived account xprv — never the mnemonic. */
 export async function restoreSession(): Promise<boolean> {
-  if (unlockedMnemonic) return true
+  if (unlockedXprv) return true
   let entry: SessionEntry | undefined
   try {
     entry = (await chrome.storage.session.get(SESSION_KEY))[SESSION_KEY] as SessionEntry | undefined
@@ -118,9 +119,9 @@ export async function restoreSession(): Promise<boolean> {
     }
     return false
   }
-  unlockedMnemonic = entry.mnemonic
+  unlockedXprv = entry.xprv
   await openStock()
-  await persistSession(entry.mnemonic) // sliding window on each restore
+  await persistSession(entry.xprv) // sliding window on each restore
   return true
 }
 
@@ -130,29 +131,38 @@ export async function walletExists(): Promise<boolean> {
 }
 
 export function isUnlocked(): boolean {
-  return unlockedMnemonic !== null
+  return unlockedXprv !== null
 }
 
-/** Clear the in-memory seed AND the persisted session (explicit Lock). */
+/** Clear the in-memory key AND the persisted session (explicit Lock, idle
+ *  timeout, or OS screen-lock). */
 export function lock(): void {
-  unlockedMnemonic = null
+  unlockedXprv = null
   void chrome.storage.session.remove(SESSION_KEY)
 }
 
-/** The unlocked mnemonic, for key derivation / signing. Null while locked. */
-export function unlockedSeed(): string | null {
-  return unlockedMnemonic
+/** The unlocked BIP-86 account xprv for worker-confined signing. Restores from
+ *  the hot session if this context hasn't loaded it yet (e.g. a freshly-respawned
+ *  MV3 worker). Null while locked. The mnemonic is never returned — signing uses
+ *  the derived account key only. */
+export async function signingKey(): Promise<string | null> {
+  if (unlockedXprv) return unlockedXprv
+  await restoreSession()
+  return unlockedXprv
 }
 
-/** Decrypt the vault with `password` and hold the seed in memory. Returns false
- *  on a wrong password (AES-GCM auth failure) or if no wallet exists. */
+/** Decrypt the vault with `password`, derive + cache the account xprv. Returns
+ *  false on a wrong password (AES-GCM auth failure) or if no wallet exists. The
+ *  decrypted mnemonic is used only to derive the account key, then dropped — it is
+ *  never persisted to the hot session. */
 export async function unlock(password: string): Promise<boolean> {
   const vault = await kvGet<Vault>('vault')
   if (!vault) return false
   try {
-    unlockedMnemonic = await decryptSeed(vault, password)
+    const mnemonic = await decryptSeed(vault, password)
+    unlockedXprv = accountXprvFromMnemonic(mnemonic)
     await openStock()
-    await persistSession(unlockedMnemonic)
+    await persistSession(unlockedXprv)
     return true
   } catch {
     return false
@@ -238,7 +248,10 @@ export async function createWallet(password: string): Promise<GeneratedWallet> {
   const vault = await encryptSeed(w.mnemonic, password)
   await openStock() // ensures a stock exists + persisted
   await kvPutAll({ descriptor: w.descriptor, vault })
-  unlockedMnemonic = w.mnemonic
+  // Cache only the derived account xprv (not the mnemonic). The caller still gets
+  // the mnemonic back to display once for backup; it isn't persisted to session.
+  unlockedXprv = accountXprvFromMnemonic(w.mnemonic)
+  await persistSession(unlockedXprv)
   return w
 }
 

@@ -4,7 +4,7 @@ import type { SignRequest } from '../types/sign-request'
 // sign screen before the worker's decode pipeline exists (open `index.html?id=mock`).
 export const MOCK_SIGN_REQUEST: SignRequest = {
   id: 'mock',
-  origin: 'app.colorex.exchange',
+  origin: 'app.colorex.io',
   recognized: true,
   action: 'Sign transaction',
   intent: 'Swap on Colorex',

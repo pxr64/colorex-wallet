@@ -11,7 +11,8 @@
 import { assembleSignRequest } from '../colorex/sign-request'
 import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
-import { createInvoice, createTransfer, decodePsbt } from '../wallet/store'
+import { createInvoice, createTransfer, decodePsbt, lock, signingKey } from '../wallet/store'
+import { signPsbt } from '../wallet/sign'
 import { drain, enqueue, getQueue, removeItem } from '../wallet/import-queue'
 import type { SignRequest, SignResult } from '../types/sign-request'
 import type {
@@ -87,6 +88,17 @@ chrome.runtime.onInstalled.addListener(() => void ensureDrainAlarm())
 // Kick once on every worker spin-up (covers the wake that revived the worker).
 void ensureDrainAlarm()
 void drain()
+
+// --- idle / OS-lock auto-lock (#2) ---
+// Wipe the unlocked account key when the user goes idle for AUTO_LOCK_SECS or the
+// OS screen locks. `chrome.idle` wakes the (ephemeral) worker on the transition,
+// and `lock()` clears both the in-memory key and the shared session entry so every
+// context re-locks. Backstops the sliding session-expiry in store.ts.
+const AUTO_LOCK_SECS = 15 * 60 // keep in step with store.ts AUTO_LOCK_MS
+chrome.idle.setDetectionInterval(AUTO_LOCK_SECS)
+chrome.idle.onStateChanged.addListener((state) => {
+  if (state === 'idle' || state === 'locked') lock()
+})
 
 // --- provider requests from the content script ---
 chrome.runtime.onMessage.addListener((msg: ProviderRequest | PopupRequest, _sender, sendResponse) => {
@@ -177,7 +189,7 @@ function handlePopup(msg: PopupRequest, sendResponse: (r: PopupResponse) => void
       return sendResponse(p ? { kind: 'signRequest', request: p.request } : { kind: 'notFound' })
     }
     case 'decide':
-      void finalize(msg.id, msg.approve, msg.signedPsbt).then((result) => sendResponse({ kind: 'decided', result }))
+      void finalize(msg.id, msg.approve).then((result) => sendResponse({ kind: 'decided', result }))
       return
     case 'getConnectRequest': {
       const p = pendingConnect.get(msg.id)
@@ -208,6 +220,14 @@ function requestConnect(id: string, origin: string): Promise<boolean> {
 // Build the verified SignRequest, open the approval window, and resolve when the
 // user decides. The promise the dApp awaits is settled via `pending`.
 async function signAndSend(id: string, intent: SignAndSendIntent, origin: string): Promise<SignResult> {
+  // Origin trust, enforced (#1): refuse to sign for an origin the user hasn't
+  // connected. This is the real boundary — `recognized` in the sign screen is only
+  // a visual pill. A well-behaved dApp calls connect() first (MetaMask-style); an
+  // unconnected/phishing origin can't even open an approval window.
+  const { connected = [] } = await chrome.storage.local.get('connected')
+  if (!connected.includes(origin)) {
+    return { ok: false, error: 'user_rejected', message: 'origin not connected — call connect() first' }
+  }
   const request = await buildSignRequest(id, intent, origin)
   return new Promise<SignResult>((resolve) => {
     pending.set(id, { request, settle: resolve })
@@ -259,18 +279,29 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
   })
 }
 
-// The approval window signs locally (it holds the unlocked seed) and hands back
-// the signed PSBT; we resolve the dApp's promise with it (the dApp submits to the
-// broker → the maker finalizes + broadcasts). On reject → user_rejected.
-async function finalize(id: string, approve: boolean, signedPsbt?: string): Promise<SignResult> {
+// Worker-confined signing (#2): the WORKER is the single context that holds the
+// unlocked account key, so it signs here using the request's own psbt + signInputs
+// once the user approves — the approval window never touches a key, it only relays
+// the decision. We resolve the dApp's promise with the signed PSBT (the dApp
+// submits to the broker → the maker finalizes + broadcasts). On reject →
+// user_rejected; if the session locked out from under us → sign_failed.
+async function finalize(id: string, approve: boolean): Promise<SignResult> {
   const p = pending.get(id)
   if (!p) return { ok: false, error: 'sign_failed', message: 'unknown request' }
   pending.delete(id)
-  const result: SignResult = !approve
-    ? { ok: false, error: 'user_rejected' }
-    : signedPsbt
-      ? { ok: true, signedPsbt }
-      : { ok: false, error: 'sign_failed', message: 'no signature from approval window' }
+  let result: SignResult
+  if (!approve) {
+    result = { ok: false, error: 'user_rejected' }
+  } else {
+    try {
+      const xprv = await signingKey()
+      if (!xprv) throw new Error('wallet is locked')
+      const signedPsbt = signPsbt(p.request.psbtBase64, p.request.signInputs ?? [], xprv)
+      result = { ok: true, signedPsbt }
+    } catch (e) {
+      result = { ok: false, error: 'sign_failed', message: (e as Error).message }
+    }
+  }
   p.settle(result)
   return result
 }

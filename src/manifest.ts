@@ -7,7 +7,7 @@ import { defineManifest } from '@crxjs/vite-plugin'
 // the real origin only.
 export default defineManifest((env) => {
   const dev = env.mode === 'development'
-  const origins = ['https://app.colorex.exchange/*', ...(dev ? ['http://localhost:5174/*'] : [])]
+  const origins = ['https://app.colorex.io/*', ...(dev ? ['http://localhost:5174/*'] : [])]
   return {
     manifest_version: 3,
     name: 'Colorex Wallet',
@@ -37,7 +37,7 @@ export default defineManifest((env) => {
         run_at: 'document_start',
       },
     ],
-    permissions: ['storage', 'alarms'],
+    permissions: ['storage', 'alarms', 'idle'],
     host_permissions: origins,
   }
 })

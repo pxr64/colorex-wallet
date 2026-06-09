@@ -9,8 +9,6 @@ import { T, fmt, usd } from '../theme'
 import { AssetIcon, Eyebrow, Icon, Live, Mono, Tag } from '../atoms'
 import type { BalanceDelta, SignRequest, SignResult } from '../../types/sign-request'
 import type { PopupResponse } from '../../worker/messages'
-import { signPsbt } from '../../wallet/sign'
-import { unlockedSeed } from '../../wallet/store'
 import { MOCK_SIGN_REQUEST } from '../mock'
 
 const SIGN_FLOW = [
@@ -60,18 +58,15 @@ export function SignScreen({ requestId, onClose }: { requestId: string; onClose?
     setStep('signing')
     if (isMock) return
     try {
-      // Sign locally — the seed is in THIS window's memory (unlocked here), never
-      // the worker. We sign exactly req.signInputs, then hand the worker the
-      // signed PSBT to resolve the dApp's promise.
-      const seed = unlockedSeed()
-      if (!seed) throw new Error('wallet is locked')
-      const signedPsbt = signPsbt(req!.psbtBase64, req!.signInputs ?? [], seed)
-      const resp: PopupResponse = await chrome.runtime.sendMessage({ kind: 'decide', id: requestId, approve: true, signedPsbt })
+      // Worker-confined signing (#2): this window holds NO key — it only relays the
+      // user's approval. The worker signs req.signInputs with the unlocked account
+      // key and resolves the dApp's promise.
+      const resp: PopupResponse = await chrome.runtime.sendMessage({ kind: 'decide', id: requestId, approve: true })
       const r = resp.kind === 'decided' ? resp.result : { ok: false as const, error: 'sign_failed' as const }
       setResult(r)
       setStep(r.ok ? 'done' : 'review')
     } catch (e) {
-      console.error('[colorex] signPsbt failed', e)
+      console.error('[colorex] sign decision failed', e)
       setResult({ ok: false, error: 'sign_failed', message: (e as Error).message })
       setStep('review')
     }

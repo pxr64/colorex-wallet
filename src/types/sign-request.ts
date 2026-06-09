@@ -29,7 +29,7 @@ export interface PsbtLeg {
 
 export interface SignRequest {
   id: string // pending-request id (resolve/reject key)
-  origin: string // 'app.colorex.exchange'
+  origin: string // 'app.colorex.io'
   faviconUrl?: string
   recognized: boolean // known/connected origin? → trust pill + risk branch
   action: 'Sign transaction'

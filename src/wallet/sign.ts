@@ -1,16 +1,19 @@
-// Taproot PSBT signing — in JS (the popup, where the unlocked seed lives), since
-// bp-wallet's signing path pulls aws-lc (not wasm-able). The wallet signs EXACTLY
-// the inputs it was told to (signInputs), each with the BIP-86 key for its
-// (keychain, addrIndex) — never auto-detecting. Derivation parity with the wasm
-// address derivation is verified. Returns the partially-signed PSBT (the maker
-// finalizes its own inputs + combines).
+// Taproot PSBT signing — in JS (the background WORKER, the single context that
+// holds the unlocked key), since bp-wallet's signing path pulls aws-lc (not
+// wasm-able). The wallet signs EXACTLY the inputs it was told to (signInputs),
+// each with the BIP-86 key for its (keychain, addrIndex) — never auto-detecting.
+// Derivation parity with the wasm address derivation is verified. Returns the
+// partially-signed PSBT (the maker finalizes its own inputs + combines).
+//
+// Signs from the ACCOUNT-level xprv (`m/86'/1'/0'`), not the mnemonic — the
+// worker-confined hot key (#2). The raw recovery phrase never reaches here.
 
 import { HDKey } from '@scure/bip32'
-import { mnemonicToSeedSync } from '@scure/bip39'
 import * as btc from '@scure/btc-signer'
 import type { SignInput } from '../types/sign-request'
 
-// tprv/tpub version bytes (testnet/signet), matching keys.ts.
+// tprv/tpub version bytes (testnet/signet), matching keys.ts — needed so
+// `fromExtendedKey` parses a tprv account key.
 const TESTNET_VERSIONS = { private: 0x04358394, public: 0x043587cf }
 
 function b64ToBytes(b64: string): Uint8Array {
@@ -26,9 +29,11 @@ function bytesToB64(bytes: Uint8Array): string {
 }
 
 /** Sign the given inputs of a maker's partial PSBT with the wallet's keys.
- *  `signInputs` come from decode_psbt (index + keychain + addrIndex). */
-export function signPsbt(psbtB64: string, signInputs: SignInput[], mnemonic: string): string {
-  const account = HDKey.fromMasterSeed(mnemonicToSeedSync(mnemonic), TESTNET_VERSIONS).derive("m/86'/1'/0'")
+ *  `signInputs` come from decode_psbt (index + keychain + addrIndex).
+ *  `accountXprv` is the BIP-86 account key (`m/86'/1'/0'` tprv) from the unlocked
+ *  worker session — see `accountXprvFromMnemonic`. */
+export function signPsbt(psbtB64: string, signInputs: SignInput[], accountXprv: string): string {
+  const account = HDKey.fromExtendedKey(accountXprv, TESTNET_VERSIONS)
   const tx = btc.Transaction.fromPSBT(b64ToBytes(psbtB64), {
     allowUnknownInputs: true,
     allowUnknownOutputs: true,

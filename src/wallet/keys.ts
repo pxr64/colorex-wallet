@@ -31,3 +31,14 @@ export function walletFromMnemonic(mnemonic: string): GeneratedWallet {
   const descriptor = `[${fp}/86h/1h/0h]${tpub}/<0;1;10>/*`
   return { mnemonic, descriptor }
 }
+
+/** The account-level (BIP-86 `m/86'/1'/0'`) extended PRIVATE key (tprv). This is
+ *  what the unlocked hot session caches in place of the raw mnemonic: it can
+ *  derive + sign every swap input (`/0,1,10/*`), but it is NOT the portable,
+ *  cross-wallet recovery phrase — so a session-storage leak is a strictly smaller
+ *  loss. The mnemonic stays only in the encrypted vault (recovery). See #2. */
+export function accountXprvFromMnemonic(mnemonic: string): string {
+  const account = HDKey.fromMasterSeed(mnemonicToSeedSync(mnemonic), TESTNET_VERSIONS).derive("m/86'/1'/0'")
+  if (!account.privateExtendedKey) throw new Error('failed to derive account xprv')
+  return account.privateExtendedKey
+}
