@@ -471,17 +471,15 @@ impl RgbStock {
         if seals.is_empty() {
             return Err(JsError::new("create_transfer: no outpoints supplied"));
         }
-        // Witness-vout: the seal's txid IS the witness tx the consignment anchors
-        // to. If every outpoint shares one witness tx, pass it; else walk the graph.
-        let first = seals[0].txid;
-        let witness_id = if seals.iter().all(|s| s.txid == first) {
-            Some(first)
-        } else {
-            None
-        };
+        // `witness_id` MUST be None: the seal's txid only equals the witness tx for
+        // witness-vout seals. For RGB received on a blinded seal bound to a pre-existing
+        // outpoint, the transition lives on a *different* witness tx, and `Stock::consign`
+        // would filter out every bundle not anchored to the passed witness — yielding an
+        // empty consignment. None lets consign resolve the bundle from the outpoint and
+        // walk the graph. (Matches rfq-rgb's export_provenance.)
         let transfer = self
             .stock
-            .transfer(cid, seals, [], [], witness_id)
+            .transfer(cid, seals, [], [], None)
             .map_err(|e| JsError::new(&format!("export provenance transfer: {e}")))?;
         let mut bytes = Vec::new();
         transfer
