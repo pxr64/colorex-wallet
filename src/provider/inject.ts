@@ -9,7 +9,10 @@ interface ColorexProvider {
   getAccounts(): Promise<string[]>
   getBalances(): Promise<ProviderBalances>
   createInvoice(contractId: string, amount: number): Promise<string>
-  buildConsignment(invoice: string): Promise<string>
+  buildConsignment(
+    contractId: string,
+    amount: number,
+  ): Promise<{ consignment: string; outpoints: { txid: string; vout: number }[] }>
   acceptConsignment(consignment: string): Promise<void>
   signPsbt(psbtBase64: string): Promise<string>
   signAndSend(intent: SignAndSendIntent): Promise<{ txid: string; consignment?: string }>
@@ -42,7 +45,11 @@ const provider: ColorexProvider = {
   getAccounts: () => call('getAccounts') as Promise<string[]>,
   getBalances: () => call('getBalances') as Promise<ProviderBalances>,
   createInvoice: (contractId, amount) => call('createInvoice', { contractId, amount }) as Promise<string>,
-  buildConsignment: (invoice) => call('buildConsignment', { invoice }) as Promise<string>,
+  buildConsignment: (contractId, amount) =>
+    call('buildConsignment', { contractId, amount }) as Promise<{
+      consignment: string
+      outpoints: { txid: string; vout: number }[]
+    }>,
   acceptConsignment: (consignment) => call('acceptConsignment', { consignment }) as Promise<void>,
   signPsbt: (psbtBase64) => call('signPsbt', { psbtBase64 }) as Promise<string>,
   signAndSend: (intent) =>

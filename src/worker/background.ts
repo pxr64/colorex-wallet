@@ -30,11 +30,6 @@ import type {
 // create_invoice + taproot signPsbt are still pending.
 const sdk: WalletSdk = new StoreWalletSdk('signet')
 
-// Fee for the taker's throwaway sell-consignment witness tx — mirrors taker-cli's
-// SELL_RGB_FEE_SATS. The PSBT is discarded (the maker re-anchors), so this only
-// has to be coverable by the RGB seal UTXO's bitcoin value (≥546 from the buy).
-const SELL_RGB_FEE_SATS = 200
-
 interface Pending {
   request: SignRequest
   settle: (result: SignResult) => void
@@ -130,13 +125,13 @@ async function handleProvider(msg: ProviderRequest, sendResponse: (r: unknown) =
         return sendResponse({ id: msg.id, ok: true, result: invoice })
       }
       case 'buildConsignment': {
-        // Sell leg: the taker builds an RGB consignment paying the maker's invoice.
-        // rgb-wasm `create_transfer` scans the wallet's own UTXOs (in `createTransfer`)
-        // to fund the throwaway witness tx; the maker re-anchors the RGB into the
-        // swap tx. 200 sats mirrors taker-cli's SELL_RGB_FEE_SATS (the PSBT is
-        // discarded, so this fee only has to be coverable by the RGB seal UTXO).
-        const consignment = await createTransfer(msg.invoice, SELL_RGB_FEE_SATS, sdk.getNetwork())
-        return sendResponse({ id: msg.id, ok: true, result: consignment })
+        // Sell leg (provenance model): pick the wallet's RGB UTXOs for the contract
+        // covering `amount`, export a provenance consignment for them, and return it
+        // with the chosen outpoints. The maker spends those into the swap tx it
+        // builds. No invoice, no fee, no anchor. See rgb-rfq
+        // docs/provenance-consignment-proposal.md.
+        const result = await createTransfer(msg.contractId, msg.amount, sdk.getNetwork())
+        return sendResponse({ id: msg.id, ok: true, result })
       }
       case 'acceptConsignment': {
         // Buy leg, after broadcast: ENQUEUE the maker's consignment (persistent,

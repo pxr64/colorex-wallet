@@ -309,34 +309,48 @@ function bytesToB64(bytes: Uint8Array): string {
   return btoa(bin)
 }
 
-/** The taker's SELL leg: build an RGB consignment paying the maker's `invoice`,
- *  returned as base64 (the dApp POSTs it to the broker; the maker validates it and
- *  re-anchors the RGB into the swap tx). `create_transfer` needs a hydrated UTXO
- *  set — wasm has no synced wallet — so we Esplora-scan the wallet's own UTXOs
- *  (keychains 0/1/10), each tagged with its (keychain, index) derivation. The PSBT
- *  it builds is discarded; read-only against the stock, so nothing to persist. */
+export interface SellConsignment {
+  /** base64 RGB provenance consignment */
+  consignment: string
+  /** the RGB UTXOs being sold (named to the maker on the wire) */
+  outpoints: Array<{ txid: string; vout: number }>
+}
+
+/** The taker's SELL leg (provenance model): pick the wallet's own RGB UTXOs for
+ *  `contractId` covering `amount`, export a provenance consignment for them, and
+ *  return it (base64) + the chosen outpoints. The dApp POSTs both to the broker;
+ *  the maker validates the consignment, confirms the RGB at those outpoints, and
+ *  spends them into the swap tx it builds. Pure stock read — no PSBT, no fee, no
+ *  wallet hydration. See rgb-rfq docs/provenance-consignment-proposal.md. */
 export async function createTransfer(
-  invoice: string,
-  fee: number,
+  contractId: string,
+  amount: number,
   network = 'signet',
-): Promise<string> {
-  const descriptor = await getDescriptor()
-  if (!descriptor) throw new Error('no wallet — set one up first')
+): Promise<SellConsignment> {
   const s = await openStock()
-  const tagged = await ownedAddresses(network)
-  const lists = await Promise.all(
-    tagged.map((t) =>
-      addressUtxos(t.address)
-        .then((us) =>
-          us.map((u) => ({ txid: u.txid, vout: u.vout, value: u.value, keychain: t.keychain, index: t.index })),
-        )
-        .catch(() => [] as Array<{ txid: string; vout: number; value: number; keychain: number; index: number }>),
-    ),
-  )
-  const utxos = lists.flat()
-  if (utxos.length === 0) throw new Error('no spendable UTXOs to build the transfer')
-  const bytes = s.create_transfer(descriptor, invoice, JSON.stringify(utxos), BigInt(fee), network)
-  return bytesToB64(bytes)
+  // Which of our owned UTXOs carry this contract's RGB, with amounts.
+  const owned = await ownedOutpoints(network)
+  const allocs = JSON.parse(
+    s.contract_outpoints(contractId, JSON.stringify(owned)),
+  ) as Array<{ outpoint: string; amount: number }>
+  // Pick largest-first until we cover `amount`.
+  allocs.sort((a, b) => b.amount - a.amount)
+  const chosen: string[] = []
+  let have = 0
+  for (const a of allocs) {
+    if (have >= amount) break
+    have += a.amount
+    chosen.push(a.outpoint)
+  }
+  if (have < amount) {
+    throw new Error(`insufficient RGB to sell: have ${have}, need ${amount}`)
+  }
+  const bytes = s.create_transfer(contractId, JSON.stringify(chosen))
+  const outpoints = chosen.map((o) => {
+    const [txid, vout] = o.split(':')
+    return { txid, vout: Number(vout) }
+  })
+  return { consignment: bytesToB64(bytes), outpoints }
 }
 
 // The wallet's derived addresses across the keychains RGB swaps touch, each
