@@ -1,7 +1,7 @@
 # Colorex Wallet
 
 A self-custodial **RGB-on-Bitcoin wallet** delivered as an **MV3 browser
-extension** — the taker wallet for the [Colorex](https://colorex.exchange) RFQ
+extension** — the taker wallet for the [Colorex](https://colorex.io) RFQ
 exchange. Keys and RGB state live on the device; the wallet signs locally.
 
 > Status: RGB runs **in-browser** via our own `rgb-wasm/` build (ROADMAP M1
