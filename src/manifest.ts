@@ -1,13 +1,13 @@
 import { defineManifest } from '@crxjs/vite-plugin'
 
-// Single source of truth for the MV3 manifest. Host/match patterns point at the
-// Colorex dApp; tighten/extend as more origins connect. In dev builds we also
-// inject on the local colorex-dapp dev server (http://localhost:5174) so the
-// provider handshake can be exercised end-to-end; production stays restricted to
-// the real origin only.
-export default defineManifest((env) => {
-  const dev = env.mode === 'development'
-  const origins = ['https://app.colorex.io/*', ...(dev ? ['http://localhost:5174/*'] : [])]
+// Single source of truth for the MV3 manifest. window.colorex is injected on the
+// Colorex dApp AND on localhost / 127.0.0.1 so third-party devs can build dApps
+// against the wallet locally — on any port (Chrome match patterns are port-
+// agnostic, so http://localhost/* covers every dev server). Injection ≠ access:
+// every origin must still pass the per-origin connect-approval popup before it
+// can read balances or request a signature (same model as MetaMask).
+export default defineManifest(() => {
+  const origins = ['https://app.colorex.io/*', 'http://localhost/*', 'http://127.0.0.1/*']
   return {
     manifest_version: 3,
     name: 'Colorex Wallet',

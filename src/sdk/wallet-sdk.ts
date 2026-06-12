@@ -16,6 +16,7 @@ export interface AssetBalance {
   precision: number
   spendable: number
   total: number
+  utxos: number
 }
 
 export interface ReceiveInvoice {
@@ -29,7 +30,7 @@ export interface WalletSdk {
   getNetwork(): BitcoinNetworkName
 
   // --- read path ---
-  getBtcBalance(): Promise<{ spendableSats: number; totalSats: number }>
+  getBtcBalance(): Promise<{ spendableSats: number; totalSats: number; utxos: number }>
   listAssets(): Promise<AssetBalance[]>
   getAssetBalance(assetId: string): Promise<AssetBalance>
 

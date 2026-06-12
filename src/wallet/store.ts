@@ -14,6 +14,8 @@ export interface Asset {
   ticker: string
   precision: number
   balance: number
+  /** Distinct owned outpoints holding this asset (from the wasm). */
+  utxos: number
 }
 
 /** Format a raw integer balance with `precision` decimals for display. */
@@ -202,6 +204,18 @@ async function ownedOutpoints(network = 'signet'): Promise<string[]> {
   await rgbReady()
   const addrs: string[] = []
   for (const keychain of [0, 1, 10]) {
+    // FLAT first-20-per-keychain scan — every index 0..19 is queried regardless
+    // of emptiness (no gap-limit truncation), so sparse low indices are fine.
+    // SAFE TODAY because receive addresses derive from a fresh in-memory wallet
+    // with no persisted used-index state, so they land at ~index 0 — well inside
+    // this window. If that ever changes (persistent derivation state, or fresh
+    // per-invoice receive addresses for privacy), keychain-10 indices can climb
+    // past 20 and we'd silently miss our own RGB — the same class of bug that
+    // stranded the maker's tapret change (rgb-rfq: bp-wallet's gap-limited scan +
+    // index drift). Fix then would be a RESETTING gap limit (extend the window
+    // while activity is found), not a flat cap. Our RGB outputs are plain P2TR
+    // (we never host the tapret commitment — the maker does), so this is purely
+    // an address-window concern, not a tweaked-spk one.
     addrs.push(...(JSON.parse(wasm.derive_addresses(descriptor, network, keychain, 20)) as string[]))
   }
   const lists = await Promise.all(addrs.map((a) => addressUtxos(a).catch(() => [])))
@@ -225,20 +239,110 @@ export interface WalletSnapshot {
   assets: Asset[]
 }
 
-/** One Esplora scan → the wallet's BTC balance (sum of owned UTXOs) + the
- *  owned-filtered RGB assets. Used by the home screen so it scans once. */
-export async function walletSnapshot(network = 'signet'): Promise<WalletSnapshot> {
+/** One asset balance: spendable (confirmed/mined) + total (incl. mempool /
+ *  tentative). `total - spendable` is the pending delta. `utxos` = distinct
+ *  owned outpoints holding the asset. */
+export interface AssetBalances {
+  contractId: string
+  ticker: string
+  precision: number
+  spendable: number
+  total: number
+  utxos: number
+}
+
+export interface AccountBalances {
+  btc: { spendableSats: number; totalSats: number; utxos: number }
+  assets: AssetBalances[]
+}
+
+/** THE canonical balance computation — one address derivation + one Esplora scan
+ *  — the single source of truth for BOTH the wallet popup AND the dApp provider,
+ *  so they can never drift. The wallet owns the RGB stash, so it is necessarily
+ *  authoritative; the dApp only renders what `getBalances()` returns.
+ *
+ *  - BTC = the single ACTIVE account (keychain-0, index 0 — the address a swap
+ *    funds from). `spendable` = confirmed, `total` = confirmed + mempool.
+ *  - RGB = stock allocations ∩ ALL owned outpoints (an allocation can sit on any
+ *    keychain). `spendable == total` until per-allocation tentative tracking
+ *    lands (colorex-wallet#4).
+ *
+ *  Derivation path: m/86'/1'/0'/<0;1;10>/* (BIP-86 taproot; 0=receive, 1=change,
+ *  10=tapret anchors). A future account feature switches the index. */
+export async function accountBalances(network = 'signet'): Promise<AccountBalances> {
   const s = await openStock()
+  const empty: AccountBalances = { btc: { spendableSats: 0, totalSats: 0, utxos: 0 }, assets: [] }
+  const descriptor = await getDescriptor()
+  if (!descriptor) return empty
+  await rgbReady()
+
   const tagged = await ownedAddresses(network)
   if (tagged.length === 0) {
-    return { btcSats: 0, assets: JSON.parse(s.list_assets()) as Asset[] }
+    // No derivable addresses → unfiltered stock balances (can't owned-filter BTC).
+    const assets = (JSON.parse(s.list_assets()) as Asset[]).map((a) => ({
+      contractId: a.contractId,
+      ticker: a.ticker,
+      precision: a.precision,
+      spendable: a.balance,
+      total: a.balance,
+      utxos: a.utxos,
+    }))
+    return { ...empty, assets }
   }
+  // Single Esplora scan across the derived addresses.
   const lists = await Promise.all(tagged.map((t) => addressUtxos(t.address).catch(() => [] as Utxo[])))
-  const utxos = lists.flat()
-  const btcSats = utxos.reduce((sum, u) => sum + (u.value || 0), 0)
-  const owned = utxos.map((u) => `${u.txid}:${u.vout}`)
-  const assets = JSON.parse(s.list_assets_owned(JSON.stringify(owned))) as Asset[]
-  return { btcSats, assets }
+
+  // BTC: the active account (keychain-0, index 0). Stranded dust on other indices
+  // is excluded for now (account-switcher is the future fix).
+  const fIdx = tagged.findIndex((t) => t.keychain === 0 && t.index === 0)
+  const fundingUtxos = fIdx >= 0 ? lists[fIdx] : []
+  let spendableSats = 0
+  let totalSats = 0
+  for (const u of fundingUtxos) {
+    const v = u.value || 0
+    totalSats += v
+    if (u.confirmed) spendableSats += v
+  }
+
+  // RGB: an allocation is tentative exactly when its anchoring outpoint is still
+  // in the mempool. Query the stock twice — ALL owned outpoints (total) vs
+  // CONFIRMED-only (spendable) — so `total - spendable` is the pending (incoming)
+  // amount from an in-flight swap. `utxos` (distinct outpoints) comes from the
+  // total set.
+  const flat = lists.flat()
+  const ownedAll = flat.map((u) => `${u.txid}:${u.vout}`)
+  const ownedConfirmed = flat.filter((u) => u.confirmed).map((u) => `${u.txid}:${u.vout}`)
+  const totalAssets = JSON.parse(s.list_assets_owned(JSON.stringify(ownedAll))) as Asset[]
+  const spendableById = new Map(
+    (JSON.parse(s.list_assets_owned(JSON.stringify(ownedConfirmed))) as Asset[]).map((a) => [
+      a.contractId,
+      a.balance,
+    ]),
+  )
+  const assets = totalAssets.map((a) => ({
+    contractId: a.contractId,
+    ticker: a.ticker,
+    precision: a.precision,
+    spendable: spendableById.get(a.contractId) ?? 0,
+    total: a.balance,
+    utxos: a.utxos,
+  }))
+  return { btc: { spendableSats, totalSats, utxos: fundingUtxos.length }, assets }
+}
+
+/** Home-popup shape, derived from the canonical [`accountBalances`]. */
+export async function walletSnapshot(network = 'signet'): Promise<WalletSnapshot> {
+  const b = await accountBalances(network)
+  return {
+    btcSats: b.btc.totalSats,
+    assets: b.assets.map((a) => ({
+      contractId: a.contractId,
+      ticker: a.ticker,
+      precision: a.precision,
+      balance: a.total,
+      utxos: a.utxos,
+    })),
+  }
 }
 
 /** Create a fresh wallet: generate keys (JS), encrypt the seed under `password`,
@@ -289,11 +393,22 @@ export async function fundingAddress(network = 'signet'): Promise<string | undef
 /** Spendable BTC at the funding address (keychain-0). This is the balance a swap
  *  can actually use — so it matches what the maker scans, unlike a wallet-wide
  *  sum that would include keychain-10 RGB-anchor dust. */
-export async function btcFundingSats(network = 'signet'): Promise<number> {
+/** BTC at the keychain-0 funding address, split into confirmed (spendable) and
+ *  total (confirmed + mempool). `total - spendable` is the pending delta. */
+export async function btcFundingSats(
+  network = 'signet',
+): Promise<{ spendableSats: number; totalSats: number }> {
   const addr = await fundingAddress(network)
-  if (!addr) return 0
+  if (!addr) return { spendableSats: 0, totalSats: 0 }
   const utxos = await addressUtxos(addr).catch(() => [] as Utxo[])
-  return utxos.reduce((sum, u) => sum + (u.value || 0), 0)
+  let spendableSats = 0
+  let totalSats = 0
+  for (const u of utxos) {
+    const v = u.value || 0
+    totalSats += v
+    if (u.confirmed) spendableSats += v
+  }
+  return { spendableSats, totalSats }
 }
 
 function b64ToBytes(b64: string): Uint8Array {

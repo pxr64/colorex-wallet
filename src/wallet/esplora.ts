@@ -33,13 +33,29 @@ export interface Utxo {
   txid: string
   vout: number
   value: number // sats
+  /** false = still in the mempool (pending). Esplora's `status.confirmed`. */
+  confirmed: boolean
 }
 
-/** GET /address/:addr/utxo — the wallet's UTXOs at an address. */
+/** Esplora's raw /utxo row (we keep value + the confirmed flag). */
+interface EsploraUtxo {
+  txid: string
+  vout: number
+  value: number
+  status?: { confirmed?: boolean }
+}
+
+/** GET /address/:addr/utxo — the wallet's UTXOs at an address (confirmed + mempool). */
 export async function addressUtxos(addr: string, base: string = ESPLORA_SIGNET): Promise<Utxo[]> {
   const res = await fetch(`${base}/address/${addr}/utxo`)
   if (!res.ok) throw new Error(`esplora /address/${addr}/utxo → ${res.status}`)
-  return (await res.json()) as Utxo[]
+  const rows = (await res.json()) as EsploraUtxo[]
+  return rows.map((u) => ({
+    txid: u.txid,
+    vout: u.vout,
+    value: u.value,
+    confirmed: u.status?.confirmed ?? false,
+  }))
 }
 
 /** The witness-ord entries `RgbStock.accept_consignment` expects, for `txids`. */

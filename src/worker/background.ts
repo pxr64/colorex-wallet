@@ -11,7 +11,14 @@
 import { assembleSignRequest } from '../colorex/sign-request'
 import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
-import { createInvoice, createTransfer, decodePsbt, lock, signingKey } from '../wallet/store'
+import {
+  accountBalances,
+  createInvoice,
+  createTransfer,
+  decodePsbt,
+  lock,
+  signingKey,
+} from '../wallet/store'
 import { signPsbt } from '../wallet/sign'
 import { drain, enqueue, getQueue, removeItem } from '../wallet/import-queue'
 import type { SignRequest, SignResult } from '../types/sign-request'
@@ -339,23 +346,13 @@ async function accounts(): Promise<string[]> {
 // BTC + RGB balances for the dApp's inventory. Each read is guarded so a partial
 // SDK (e.g. a not-yet-synced wallet) yields zeros/empty rather than throwing.
 async function balances(): Promise<ProviderBalances> {
-  let btc = { spendableSats: 0, totalSats: 0 }
+  // ONE canonical computation (single derive + single Esplora scan) — the same
+  // function the wallet popup uses, so the dApp and popup can never drift.
   try {
-    btc = await sdk.getBtcBalance()
+    const b = await accountBalances(sdk.getNetwork())
+    return { btc: b.btc, assets: b.assets }
   } catch {
-    /* no wallet / not synced */
+    // No wallet / not synced.
+    return { btc: { spendableSats: 0, totalSats: 0, utxos: 0 }, assets: [] }
   }
-  let assets: ProviderBalances['assets'] = []
-  try {
-    assets = (await sdk.listAssets()).map((a) => ({
-      contractId: a.assetId,
-      ticker: a.ticker,
-      precision: a.precision,
-      spendable: a.spendable,
-      total: a.total,
-    }))
-  } catch {
-    /* no assets / not synced */
-  }
-  return { btc, assets }
 }

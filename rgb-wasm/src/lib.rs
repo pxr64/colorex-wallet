@@ -566,15 +566,18 @@ impl RgbStock {
                 None => (cid.to_string(), 0u8),
             };
             let mut balance: u64 = 0;
+            let mut outpoints: std::collections::HashSet<String> = std::collections::HashSet::new();
             for details in contract.schema.owned_types.values() {
                 if let Ok(allocs) = contract.fungible(details.name.clone(), &FilterIncludeAll) {
                     for alloc in allocs {
+                        let op = alloc.seal.to_outpoint().to_string();
                         let include = match owned {
-                            Some(set) => set.contains(&alloc.seal.to_outpoint().to_string()),
+                            Some(set) => set.contains(&op),
                             None => true,
                         };
                         if include {
                             balance = balance.saturating_add(alloc.state.value());
+                            outpoints.insert(op);
                         }
                     }
                 }
@@ -584,6 +587,7 @@ impl RgbStock {
                 "ticker": ticker,
                 "precision": precision,
                 "balance": balance,
+                "utxos": outpoints.len(),
             }));
         }
         Ok(serde_json::Value::Array(out).to_string())

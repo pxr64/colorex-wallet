@@ -38,8 +38,15 @@ export type ProviderRequest =
 /** BTC + RGB balances the dApp reads to render inventory. Amounts are base units
  *  (sats for BTC; the asset's base units at `precision` for RGB). */
 export interface ProviderBalances {
-  btc: { spendableSats: number; totalSats: number }
-  assets: { contractId: string; ticker: string; precision: number; spendable: number; total: number }[]
+  btc: { spendableSats: number; totalSats: number; utxos: number }
+  assets: {
+    contractId: string
+    ticker: string
+    precision: number
+    spendable: number
+    total: number
+    utxos: number
+  }[]
 }
 
 /** worker → page (relayed back) */

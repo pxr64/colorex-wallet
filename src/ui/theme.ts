@@ -1,6 +1,5 @@
-// Design tokens + global styles, ported verbatim from the design handoff
-// (design_handoff_sign_tx/design-reference/wallet-core.jsx — the `T` object is
-// the source of truth). Keep values in sync with that handoff.
+// Design tokens + global styles, originally ported from the design handoff.
+// The `T` object below is now the self-contained source of truth.
 
 export const T = {
   bg: '#FAF8F3', // popup field
@@ -38,7 +37,7 @@ const PRICE_USD: Record<string, number> = {
   'USDC-RGB': 1.0,
 }
 
-/** Display formatting, ported from wallet-core.jsx. */
+/** Display formatting, from the original design handoff. */
 export function fmt(n: number, sym?: string): string {
   if (n == null || isNaN(n)) return '0'
   if (sym === 'tBTC')
@@ -65,6 +64,10 @@ const CSS = `
 .cxw-btn:not(:disabled):hover { transform: translateY(-1px); }
 .cxw-btn:not(:disabled):active { transform: translateY(0) scale(0.99); }
 .cxw-btn:disabled { opacity: .42; cursor: not-allowed; }
+.cxw-input { outline: none; -webkit-tap-highlight-color: transparent; }
+.cxw-input::placeholder { color: ${T.faint}; }
+.cxw-field { transition: border-color .16s, box-shadow .16s; }
+.cxw-field:focus-within { border-color: ${T.accent} !important; box-shadow: 0 0 0 3px ${T.accent}22; }
 @keyframes cxw-pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 .cxw-pulse { animation: cxw-pulse 2s ease-in-out infinite; }
 @keyframes cxw-in { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }

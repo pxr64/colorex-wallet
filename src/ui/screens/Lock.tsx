@@ -33,7 +33,7 @@ export function Lock({ onUnlock, onSetup }: { onUnlock: () => void; onSetup: () 
         <Mono style={{ fontSize: 11, color: T.mute }}><span style={{ display: 'block', marginTop: 7 }}>Colorex · RGB wallet</span></Mono>
 
         <div style={{ width: '100%', marginTop: 34 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px', height: 50, border: `1px solid ${err ? T.accent : T.hairStrong}`, borderRadius: 13, background: T.card }}>
+          <div className="cxw-field" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 14px', height: 50, border: `1px solid ${err ? T.accent : T.hairStrong}`, borderRadius: 13, background: T.card }}>
             <span style={{ color: T.faint, flex: '0 0 auto' }}><Icon.lock /></span>
             <input
               ref={ref}
