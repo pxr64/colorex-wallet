@@ -2,18 +2,22 @@
 
 ## Target C — browser-native, self-custodial
 
-`@utexo/rgb-sdk` (`UTEXOWallet`, wrapping `rgb-lib`) is compiled to **WASM** and
-run inside the MV3 **background service worker**. The full RGB lifecycle — keys,
-addresses, balances, invoices, transfers — happens **on device**, against the
-SDK's hosted RGB transport + Bitcoin indexer. No custodial backend; the trust
-note ("keys and RGB state never leave this device") is literally true.
+RGB is compiled to **WASM** and run inside the MV3 **background service worker**.
+The full RGB lifecycle — keys, addresses, balances, invoices, transfers — happens
+**on device**, against a hosted RGB transport + Bitcoin indexer. No custodial
+backend; the trust note ("keys and RGB state never leave this device") is
+literally true.
 
-The published SDK is Node-only, so the WASM build + a browser fork is the
-project's first milestone (ROADMAP M1). Until then we program against the
-`WalletSdk` interface (`src/sdk/wallet-sdk.ts`), backed by a throwing stub.
+The published `@utexo/rgb-sdk` is Node-only, so rather than fork it we built our
+own **`rgb-wasm/`** crate — a `wasm-bindgen` layer over `rgb-api` that swaps the
+filesystem `dataDir` for IndexedDB/OPFS and the Electrum socket for HTTP indexing
+(ROADMAP M1, **shipped**). The live wallet runs through the `src/wallet/` adapter
+over that build; `create_transfer` drives the dapp sell leg. (A legacy
+`WalletSdk` interface + stub lingers under `src/sdk/` from the scaffold era.)
 
-Fallbacks if WASM stalls (kept behind the same interface): a local native-host
-helper, or a server that builds PSBTs while the client keeps `signPsbt` on-device.
+Fallbacks that were kept behind the interface in case WASM stalled (a native-host
+helper, or a server that builds PSBTs while the client keeps `signPsbt`
+on-device) are no longer needed.
 
 ## Contexts (MV3)
 

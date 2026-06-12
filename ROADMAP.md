@@ -4,23 +4,25 @@ Milestones follow the build order in `design_handoff_sign_tx/INTEGRATION.md` §5
 adapted for the Colorex RFQ swap model. Each builds on the last; the hard
 unknowns are front-loaded.
 
-## M0 — Scaffold ✅ (this commit)
+> **Status (2026-06-12):** the make-or-break WASM milestone (M1) **landed** — RGB
+> runs in-browser via the `rgb-wasm/` build (own crate over `rgb-api`, not a fork
+> of `@utexo/rgb-sdk`), and the wallet has driven **live signet BTC↔RGB swaps
+> (buy + sell)** end-to-end through the broker. Later milestones (decode, sign,
+> settle) are substantially in; this file tracks intent, not a per-line ledger.
+
+## M0 — Scaffold ✅
 MV3 + Vite/React shell; background worker, content-script + page provider stubs;
 the two-client split (`src/sdk` + `src/colorex`); design-system port (`ui/theme`,
 `ui/atoms` from the handoff tokens); the **signature screen fully ported** and
 previewable on mock data (`index.html?id=mock`).
 
-## M1 — Browser `rgb-lib` / `@utexo/rgb-sdk` (make-or-break) ⏳
-The central task. Land a **WASM build of `rgb-lib`** + a **browser fork of
-`@utexo/rgb-sdk`** that runs in the service worker:
-- swap filesystem `dataDir` → IndexedDB/OPFS,
-- swap the Electrum-socket indexer → the Esplora HTTP indexer,
-- enumerate touched Node built-ins (`fs`, `net`, `crypto`).
-**Exit:** `generateKeys` / `initialize` / `getBtcBalance` run inside the worker;
-replace `StubWalletSdk` with the real adapter. Also confirm the **consignment
-delivery model** (raw blob vs RGB-transport pull) — see docs/swap-flow.md risk 1.
-*Fallback if WASM stalls: a local native-host or server transport behind the same
-`WalletSdk` interface.*
+## M1 — RGB in the browser (make-or-break) ✅
+Done — but via our own **`rgb-wasm/`** crate (a `wasm-bindgen` layer over
+`rgb-api`, swapping fs/Electrum for IndexedDB + HTTP indexing), **not** a fork of
+the Node-only `@utexo/rgb-sdk`. Keys/balances/invoices/transfers run on-device in
+the worker; `StubWalletSdk` was replaced by the real `src/wallet/` adapter and
+`create_transfer` powers the dapp sell leg. The feasibility spike that preceded
+this (was `docs/m1-wasm-spike.md`) is removed now that the build shipped.
 
 ## M2 — Keys + lock + onboarding
 Encrypted seed vault on device; in-memory unlock; create/restore flows
