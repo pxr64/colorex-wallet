@@ -1,8 +1,6 @@
-// Signature request screen — faithful port of the design handoff
-// (design_handoff_sign_tx/design-reference/wallet-sign.jsx), wired to the live
-// SignRequest contract (INTEGRATION.md §4) instead of the prototype's mock.
-// State machine: review → signing → done. Amounts are wallet-DERIVED (deltas),
-// never trusted from the dApp.
+// Signature request screen, wired to the live SignRequest contract
+// (docs/sign-request.md). State machine: review → signing → done. Amounts are
+// wallet-DERIVED (deltas), never trusted from the dApp.
 
 import { useEffect, useState } from 'react'
 import { T, fmt, usd } from '../theme'

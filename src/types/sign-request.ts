@@ -1,7 +1,7 @@
 // The contract the sign screen consumes. The background worker builds this by
 // decoding the unsigned PSBT (from the maker, via the broker) plus RGB transfer
 // metadata. Amounts here are ALWAYS wallet-derived — never trusted from the dApp.
-// See docs/swap-flow.md and the upstream INTEGRATION.md §4.
+// See docs/sign-request.md (the contract) and docs/swap-flow.md (the swap flow).
 
 export type AssetSym = string // 'USDT-RGB', 'RGBX', 'tBTC', …
 

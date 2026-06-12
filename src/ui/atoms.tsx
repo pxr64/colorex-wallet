@@ -1,6 +1,6 @@
-// Shared UI atoms + icons, ported from the design handoff (wallet-core.jsx `I`,
-// `Logo`, `AssetIcon`, `QR`, atoms; wallet-sign.jsx `SIG_I`; wallet-ui.jsx
-// `AccountAvatar`). The `T` tokens are the source of truth in theme.ts.
+// Shared UI atoms + icons (icons, Logo, AssetIcon, QR, SIG_I, AccountAvatar),
+// originally ported from the design handoff. The `T` tokens are the source of
+// truth in theme.ts.
 
 import type { CSSProperties, ReactNode, SVGProps } from 'react'
 import { T } from './theme'
@@ -143,7 +143,7 @@ export function Logo({ size = 22 }: { size?: number }) {
   )
 }
 
-// Deterministic decorative QR (module grid from a seed) — ported from wallet-core.jsx.
+// Deterministic decorative QR (module grid from a seed) — from the design handoff.
 export function QR({ seed = 'rgb', size = 132 }: { seed?: string; size?: number }) {
   const N = 21
   let h = 2166136261

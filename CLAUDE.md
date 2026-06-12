@@ -23,16 +23,15 @@ touchpoints are: create an RGB invoice (`blind/witnessReceive`) → `signPsbt` t
 The sign screen renders **wallet-derived `deltas`**, decoded from the maker's
 PSBT in the worker — **never** amounts the dApp supplied. Treat the decode
 (ROADMAP M5) as a security feature. The `SignRequest` contract is
-`src/types/sign-request.ts` (spec: `design_handoff_sign_tx/INTEGRATION.md` §4).
+`src/types/sign-request.ts`; see [`docs/sign-request.md`](./docs/sign-request.md).
 
-## Design source of truth
+## Design tokens
 
-`design_handoff_sign_tx/` is the high-fidelity handoff. Tokens live in
-`src/ui/theme.ts` (ported from `wallet-core.jsx`'s `T`) and atoms in
-`src/ui/atoms.tsx`. The sign screen (`src/ui/screens/SignScreen.tsx`) is a
-faithful port of `wallet-sign.jsx` (review → signing → done). When porting more
-screens (`wallet-send-receive.jsx`, `wallet-ui.jsx`), reuse `theme`/`atoms` and
-match the tokens exactly. Keep `prefers-reduced-motion` honored.
+Tokens live in `src/ui/theme.ts` and atoms in `src/ui/atoms.tsx` — originally
+ported from the (now-removed) design handoff, now the self-contained source of
+truth. The sign screen (`src/ui/screens/SignScreen.tsx`) is the reference port
+(review → signing → done). When adding screens, reuse `theme`/`atoms`, match the
+tokens, and keep `prefers-reduced-motion` honored.
 
 ## Conventions
 

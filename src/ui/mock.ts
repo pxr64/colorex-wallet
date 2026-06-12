@@ -1,6 +1,6 @@
 import type { SignRequest } from '../types/sign-request'
 
-// The prototype's hard-coded SIGN_REQ (INTEGRATION.md §4). Used to develop the
+// A hard-coded SignRequest (see docs/sign-request.md). Used to develop the
 // sign screen before the worker's decode pipeline exists (open `index.html?id=mock`).
 export const MOCK_SIGN_REQUEST: SignRequest = {
   id: 'mock',

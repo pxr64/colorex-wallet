@@ -46,8 +46,7 @@ src/
 ├── worker/     MV3 background: SDK host, request registry, window opener
 ├── ui/         theme + atoms (ported tokens) + screens (Sign screen ported)
 └── types/      SignRequest contract
-docs/                       architecture · swap-flow · broker API contract
-design_handoff_sign_tx/     the design source of truth (spec + prototype JSX)
+docs/                       architecture · swap-flow · sign-request · broker API contract
 ```
 
 ## Develop
@@ -62,9 +61,10 @@ npm run typecheck
 Preview the signature screen without a backend: build, open the popup at
 `index.html?id=mock` (renders the design on mock data).
 
-> `@utexo/rgb-sdk` is intentionally **not** a dependency yet — the published
-> package is Node-only. We program against the `WalletSdk` interface (`src/sdk/`)
-> and swap in the browser/WASM adapter once it exists.
+> RGB runs in-browser via our own **`rgb-wasm/`** build (a `wasm-bindgen` layer
+> over `rgb-api`), not the Node-only `@utexo/rgb-sdk`. The live wallet drives it
+> through the `src/wallet/` adapter. (A legacy `WalletSdk` stub lingers under
+> `src/sdk/` from the scaffold era.)
 
 ## Relationship to the exchange backend
 
@@ -74,6 +74,5 @@ API contract*, vendored in [`docs/colorex-broker-api.md`](./docs/colorex-broker-
 and `src/colorex/types.ts` — never a live code dependency. Keep exchange
 internals out of this public repo.
 
-See [`design_handoff_sign_tx/`](./design_handoff_sign_tx/) for the full design +
-engineering handoff (`INTEGRATION.md`), and [CLAUDE.md](./CLAUDE.md) for the
-working conventions.
+See [`docs/sign-request.md`](./docs/sign-request.md) for the sign-screen contract
+and [CLAUDE.md](./CLAUDE.md) for the working conventions.

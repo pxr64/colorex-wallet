@@ -1,8 +1,7 @@
 # Swap flow — Colorex RFQ vs the generic SDK transfer
 
-The handoff's `INTEGRATION.md` §3 models a swap as the SDK's generic
-`sendBegin → sign → sendEnd` transfer "against a pool invoice," with a note to
-*confirm the exchange's exact swap primitive*. Confirmed: **it's not that.**
+A generic RGB SDK models a swap as `sendBegin → sign → sendEnd` "against a pool
+invoice." Colorex is **not that.**
 
 Colorex is an **RFQ atomic BTC↔RGB swap where the maker builds the PSBT and
 broadcasts it.** The taker never builds or broadcasts the transfer. So the
