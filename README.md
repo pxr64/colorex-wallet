@@ -26,7 +26,7 @@ Two clients, by design (see [docs/architecture.md](./docs/architecture.md)):
    see [docs/swap-flow.md](./docs/swap-flow.md).
 
 ```
- dApp (app.colorex.exchange)
+ dApp (app.colorex.io)
    └─ window.colorex.signAndSend(intent)        src/provider/inject.ts
         └─ content script                        src/provider/content-script.ts
              └─ background worker (WASM SDK)      src/worker/background.ts
