@@ -33,7 +33,8 @@ the worker's `Map`, not in React state.
 
 ## The two clients
 
-- **`src/sdk/`** — `@utexo/rgb-sdk`: wallet lifecycle (`initialize`,
+- **`src/sdk/`** — the `WalletSdk` interface (live impl `StoreWalletSdk`, over the
+  `rgb-wasm` build in `src/wallet/`): wallet lifecycle (`initialize`,
   `getBtcBalance`, `listAssets`, `blind/witnessReceive`, `signPsbt`,
   `acceptConsignment`, `refreshWallet`).
 - **`src/colorex/`** — broker client: `requestQuotes`, `acceptQuote`,

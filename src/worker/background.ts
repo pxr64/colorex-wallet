@@ -1,5 +1,5 @@
 // MV3 background service worker — the wallet's brain. It:
-//   • hosts the wallet SDK (Target C: in-worker WASM @utexo/rgb-sdk) + the Colorex client,
+//   • hosts the wallet SDK (in-worker WASM via rgb-wasm) + the Colorex client,
 //   • keeps the pending sign-request registry (must outlive the popup),
 //   • turns a dApp intent into a verified SignRequest by building + DECODING the
 //     maker's PSBT (the security core — never trust dApp amounts),

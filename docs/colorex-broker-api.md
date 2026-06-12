@@ -66,5 +66,5 @@ OpenAPI spec once rgb-rfq issue #6 lands (ROADMAP M5).
 The buy/sell sequences are in `swap-flow.md`. In short: `/rfq` to quote, `/accept`
 to get the maker's `partial_psbt` (which the worker **decodes** into the
 `SignRequest`), then `/sign` to hand back the signed PSBT (the maker broadcasts).
-The wallet's `signPsbt` + `acceptConsignment` (from `@utexo/rgb-sdk`) bracket the
+The wallet's `signPsbt` + `acceptConsignment` (via `rgb-wasm`) bracket the
 broker calls.

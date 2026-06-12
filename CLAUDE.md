@@ -5,10 +5,10 @@ taker wallet for the Colorex RFQ exchange. Read this before changing code.
 
 ## The two-client split (do not blur it)
 
-1. **`src/sdk/` — `@utexo/rgb-sdk`** (WASM, in the service worker): the wallet's
-   own RGB lifecycle — keys, balances, receive-invoices, `signPsbt`,
-   accept-consignment. Program against the `WalletSdk` interface; the real
-   adapter lands in ROADMAP M1 (today it's `StubWalletSdk`, which throws).
+1. **`src/sdk/` — the `WalletSdk` interface**: the wallet's own RGB lifecycle —
+   keys, balances, receive-invoices, `signPsbt`, accept-consignment. The live
+   impl is `StoreWalletSdk` over the in-repo `rgb-wasm` build (`src/wallet/`), run
+   as WASM in the service worker; `StubWalletSdk` is the legacy throwing stub.
 2. **`src/colorex/` — the broker client**: the swap path against the Colorex
    broker (`/rfq → /accept → /sign`).
 
@@ -35,9 +35,8 @@ tokens, and keep `prefers-reduced-motion` honored.
 
 ## Conventions
 
-- TypeScript strict; no new runtime deps without reason. `@utexo/rgb-sdk` stays
-  out of `package.json` until the browser fork exists (it's Node-only as
-  published and would break `npm install`).
+- TypeScript strict; no new runtime deps without reason. RGB runs via the in-repo
+  `rgb-wasm` build, not `@utexo/rgb-sdk` (Node-only as published — never a dep).
 - Styling is inline-style + the injected `cxw-*` classes (no CSS framework),
   matching the handoff.
 - Popup is **380×640**; the `.cxw` shell carries tokens (`src/ui/App.tsx`).

@@ -67,4 +67,4 @@ Internal RGB/BTC send reuses M5–M6. Then `onchainReceive`/`onchainSend*` and
 - **Hardware signing** (later): keep `signPsbt` swappable so an HSM/hardware
   signer can drop in.
 - **Retire** `rfq-wallet` / `wallet-wasm` in the exchange repo — superseded by
-  `@utexo/rgb-sdk`.
+  this extension's `rgb-wasm` build.

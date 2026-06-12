@@ -28,6 +28,5 @@
     "@vitejs/plugin-react": "^4.3.1",
     "typescript": "^5.5.4",
     "vite": "^5.4.0"
-  },
-  "comment": "@utexo/rgb-sdk is NOT listed yet: the published package is Node-only. The browser/WASM fork is the project's first milestone (see ROADMAP.md M1). Code targets the WalletSdk interface in src/sdk and runs against a stub until the fork lands."
+  }
 }

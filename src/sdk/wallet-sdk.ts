@@ -1,7 +1,8 @@
-// The subset of @utexo/rgb-sdk (`UTEXOWallet`) the extension depends on. We
-// program against this interface so the rest of the app is independent of how
-// the SDK is hosted (in-worker WASM — Target C — vs a fallback transport), and
-// so signPsbt stays swappable for a hardware wallet later.
+// The wallet-lifecycle interface the extension programs against (modeled on the
+// shape of @utexo/rgb-sdk's `UTEXOWallet`, but NOT that package — it's a Node-only
+// dep we never took). We program against this interface so the rest of the app is
+// independent of how the wallet is hosted (in-worker WASM vs a fallback
+// transport), and so signPsbt stays swappable for a hardware wallet later.
 //
 // Backed by StoreWalletSdk (the wasm-native bp-wallet + rgb-api wallet in
 // src/wallet/store.ts). Most methods are real; create_invoice (blind/witness

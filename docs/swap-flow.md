@@ -45,11 +45,9 @@ builds + broadcasts the BTC side. (`SwapLeg::sell` fields — verify against
 
 ## Open questions to confirm against `rgb-lib`
 
-1. **Consignment delivery.** rgb-rfq's maker currently returns the consignment as
-   a **base64 blob**; `rgb-lib` natively *pulls* consignments from the transport
-   named in the invoice (`refreshWallet`). Either the wallet accepts a raw blob,
-   or the maker POSTs the consignment to the taker's transport (the UTEXO hosted
-   proxy in the invoice). The latter likely fits `rgb-lib` better — decide in M1/M5.
+1. **Consignment delivery.** Resolved: rgb-rfq's maker returns the consignment as
+   a **base64 blob**, and the wallet accepts it directly via `rgb-wasm`
+   (`create_transfer` / accept) — no RGB-transport pull needed.
 2. **Invoice / schema interop.** Maker (rgb-ops) and wallet (rgb-lib) are both
    RGB-Tools; verify NIA consignments validate and `witnessReceive` invoices are
    accepted by the maker.
