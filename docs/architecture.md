@@ -60,3 +60,10 @@ window.colorex.signAndSend(intent)         ── dApp intent (NOT trusted for d
 ```
 
 See `src/types/sign-request.ts` for the exact data contract the screen consumes.
+
+## Security
+
+What an attacker can and can't do — assets, trust boundaries, threats, and the
+controls that stop each path (encrypted vault, at-rest encryption, worker-confined
+signing, origin enforcement, the PSBT-decode guarantee) — is documented in
+[`threat-model.md`](./threat-model.md).
