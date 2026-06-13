@@ -8,8 +8,12 @@
 //                                   → reverted          (witness seen then dropped)
 //                       → failed(reason)                (accept errored; auto-retried)
 //
-// accept_consignment validates + writes the stock and needs NO unlocked seed (no
-// signing), so the worker drains headless / while the wallet is locked.
+// accept_consignment needs no unlocked SEED (no signing), but the RGB stock is now
+// encrypted at rest (#1), so reading/writing it requires an unlocked SESSION. The
+// drain therefore DEFERS while locked (checks `canAccessStock`): items stay queued
+// at their current state — no attempt is burned — and import on the next unlock /
+// popup-open. The consignment is durably persisted, so nothing is stranded; it just
+// lands when the wallet is next unlocked (which it must be to see/use the RGB).
 //
 // PROMOTE/REVERT both mutate the stock via the binding's `update_witnesses` (overlay
 // semantics — only the named witnesses change, the rest keep their ord): a mined
@@ -18,7 +22,7 @@
 // allocation — a true revert, not just a UI flag. The queue treats received RGB as
 // pending (not final) until its witness mines.
 
-import { db, QUEUE_STORE, acceptConsignmentOrds, consignmentWitnessIds, updateWitnesses } from './store'
+import { db, QUEUE_STORE, acceptConsignmentOrds, canAccessStock, consignmentWitnessIds, updateWitnesses } from './store'
 import { txStatusOrNull } from './esplora'
 
 export type ImportState = 'pending' | 'importing' | 'tentative' | 'confirmed' | 'reverted' | 'failed'
@@ -145,6 +149,11 @@ export function drain(): Promise<void> {
 }
 
 async function drainOnce(): Promise<void> {
+  // The stock is encrypted at rest under the session key; accepting/promoting/
+  // reverting all read+write it. While locked we DEFER the whole drain (no item
+  // touched, no attempt burned) and retry on the next unlock / popup-open. Nothing
+  // is stranded — every consignment is durably persisted in the queue.
+  if (!(await canAccessStock())) return
   for (const item of await getQueue()) {
     if (item.state === 'confirmed' || item.state === 'reverted') continue
     if (item.state === 'failed' && item.attempts >= MAX_ATTEMPTS) continue

@@ -81,14 +81,16 @@ async function kvDelete(keys: string[]): Promise<void> {
 }
 
 // --- descriptor encryption at rest (#1) ---
-// The bp-std descriptor embeds the account XPUB; stored in the clear it lets anyone
-// with disk access derive every address the wallet ever uses (a privacy leak — the
-// whole transaction history, linkable). We encrypt it at rest under a key HKDF'd
-// from the unlocked account XPRV, which lives ONLY in the hot session (memory), so
-// the on-disk blob is opaque without an unlock. This is privacy-only, not a key
-// secret: the XPUB is fully derivable from the XPRV anyway — binding its at-rest
-// key to the XPRV loses nothing and costs nothing. The trade-off: address
-// derivation / balances need an unlocked session (was: worked while locked).
+// Sensitive blobs are encrypted at rest under a key HKDF'd from the unlocked
+// account XPRV, which lives ONLY in the hot session (memory) — so the on-disk blob
+// is opaque to anyone with just disk/IndexedDB access. Two such blobs:
+//   • the bp-std DESCRIPTOR (embeds the account XPUB → derive every address the
+//     wallet ever uses; plaintext = a linkable history/privacy leak), and
+//   • the RGB STOCK (stash/state/index → which assets, amounts, contracts, history).
+// This is privacy-at-rest, not a key secret: both are derivable from / bound to the
+// XPRV anyway, so keying their at-rest encryption to the XPRV loses nothing. The
+// trade-off: anything reading them (balances, address derivation, the import-queue
+// drain) needs an unlocked session — see `canAccessStock` (was: worked while locked).
 
 interface EncBlob {
   salt: Uint8Array
@@ -96,15 +98,20 @@ interface EncBlob {
   ct: Uint8Array
 }
 
+// HKDF `info` domain-separators — distinct keys per blob class from the same XPRV.
+const DESCRIPTOR_INFO = 'colorex-descriptor-v1'
+const STOCK_INFO = 'colorex-stock-v1'
+
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s)
 const bsrc = (u: Uint8Array): BufferSource => u as unknown as BufferSource
 
 // HKDF-SHA256 from the high-entropy account XPRV — no slow KDF needed (the input
-// is already secret + high-entropy; HKDF just shapes it into an AES key).
-async function descriptorKey(xprv: string, salt: Uint8Array): Promise<CryptoKey> {
+// is already secret + high-entropy; HKDF just shapes it into an AES key). `info`
+// domain-separates the descriptor key from the stock key.
+async function blobKey(xprv: string, salt: Uint8Array, info: string): Promise<CryptoKey> {
   const ikm = await crypto.subtle.importKey('raw', bsrc(enc(xprv)), 'HKDF', false, ['deriveKey'])
   return crypto.subtle.deriveKey(
-    { name: 'HKDF', hash: 'SHA-256', salt: bsrc(salt), info: bsrc(enc('colorex-descriptor-v1')) },
+    { name: 'HKDF', hash: 'SHA-256', salt: bsrc(salt), info: bsrc(enc(info)) },
     ikm,
     { name: 'AES-GCM', length: 256 },
     false,
@@ -112,17 +119,25 @@ async function descriptorKey(xprv: string, salt: Uint8Array): Promise<CryptoKey>
   )
 }
 
-async function encryptDescriptor(descriptor: string, xprv: string): Promise<EncBlob> {
+async function sealBytes(data: Uint8Array, xprv: string, info: string): Promise<EncBlob> {
   const salt = crypto.getRandomValues(new Uint8Array(16))
   const iv = crypto.getRandomValues(new Uint8Array(12))
-  const key = await descriptorKey(xprv, salt)
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: bsrc(iv) }, key, bsrc(enc(descriptor))))
+  const key = await blobKey(xprv, salt, info)
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: bsrc(iv) }, key, bsrc(data)))
   return { salt, iv, ct }
 }
 
+async function openBytes(blob: EncBlob, xprv: string, info: string): Promise<Uint8Array> {
+  const key = await blobKey(xprv, blob.salt, info)
+  return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bsrc(blob.iv) }, key, bsrc(blob.ct)))
+}
+
+async function encryptDescriptor(descriptor: string, xprv: string): Promise<EncBlob> {
+  return sealBytes(enc(descriptor), xprv, DESCRIPTOR_INFO)
+}
+
 async function decryptDescriptor(blob: EncBlob, xprv: string): Promise<string> {
-  const key = await descriptorKey(xprv, blob.salt)
-  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bsrc(blob.iv) }, key, bsrc(blob.ct))
+  const pt = await openBytes(blob, xprv, DESCRIPTOR_INFO)
   return new TextDecoder().decode(pt)
 }
 
@@ -245,11 +260,23 @@ export function isUnlocked(): boolean {
   return unlockedXprv !== null
 }
 
-/** Clear the in-memory key AND the persisted session (explicit Lock, idle
- *  timeout, or OS screen-lock). */
+/** Clear the in-memory key, the decrypted stock, AND the persisted session
+ *  (explicit Lock, idle timeout, or OS screen-lock). Dropping `stock` means a
+ *  locked wallet holds no decrypted RGB state in memory; openStock re-loads +
+ *  re-decrypts it on the next unlock. */
 export function lock(): void {
   unlockedXprv = null
+  stock = null
   void chrome.storage.session.remove(SESSION_KEY)
+}
+
+/** Whether the encrypted stock can be read/written right now — i.e. the wallet is
+ *  unlocked, or a still-valid session is restorable into this (possibly fresh MV3)
+ *  worker. The headless import-queue drain checks this to DEFER cleanly while
+ *  locked instead of erroring every item (the consignment stays durably queued and
+ *  imports on the next unlock — nothing is stranded). */
+export async function canAccessStock(): Promise<boolean> {
+  return (await signingKey()) !== null
 }
 
 /** The unlocked BIP-86 account xprv for worker-confined signing. Restores from
@@ -331,17 +358,31 @@ async function wipeWallet(): Promise<void> {
   }
 }
 
-/** Load the RGB stock from IndexedDB (or create a fresh one) — idempotent. */
+/** Decrypt one stored stock blob. Legacy plaintext (a bare Uint8Array from before
+ *  at-rest encryption) is returned as-is; an EncBlob needs the unlocked XPRV. */
+async function openStockBytes(raw: Uint8Array | EncBlob): Promise<Uint8Array> {
+  if (raw instanceof Uint8Array) return raw // legacy plaintext (migrates on next persist)
+  if (!unlockedXprv) throw new Error('RGB stock is encrypted — unlock required')
+  return openBytes(raw, unlockedXprv, STOCK_INFO)
+}
+
+/** Load the RGB stock from IndexedDB (or create a fresh one) — idempotent. The
+ *  stash/state/index blobs are encrypted at rest (#1), so loading an existing
+ *  stock requires an unlocked session; throws otherwise (callers that may run
+ *  locked — balances, the drain — guard with `canAccessStock`). */
 export async function openStock(): Promise<Stock> {
   if (stock) return stock
   await rgbReady()
   const [stash, state, index] = await Promise.all([
-    kvGet<Uint8Array>('stash'),
-    kvGet<Uint8Array>('state'),
-    kvGet<Uint8Array>('index'),
+    kvGet<Uint8Array | EncBlob>('stash'),
+    kvGet<Uint8Array | EncBlob>('state'),
+    kvGet<Uint8Array | EncBlob>('index'),
   ])
-  if (stash && state && index) {
-    stock = wasm.RgbStock.load(stash, state, index)
+  if (stash != null && state != null && index != null) {
+    const [a, b, c] = await Promise.all([openStockBytes(stash), openStockBytes(state), openStockBytes(index)])
+    stock = wasm.RgbStock.load(a, b, c)
+    // Upgrade a legacy plaintext stock to encrypted-at-rest now that we're unlocked.
+    if (stash instanceof Uint8Array && unlockedXprv) await persist()
   } else {
     stock = new wasm.RgbStock()
     await persist()
@@ -349,11 +390,19 @@ export async function openStock(): Promise<Stock> {
   return stock
 }
 
-/** Write the RGB stock through to IndexedDB. Call after every mutation. */
+/** Write the RGB stock through to IndexedDB, encrypted at rest. Call after every
+ *  mutation. Requires an unlocked session (the stock is sealed under the XPRV key);
+ *  throws while locked rather than silently writing plaintext. */
 export async function persist(): Promise<void> {
   if (!stock) return
+  if (!unlockedXprv) throw new Error('cannot persist RGB stock while locked')
   const snap = stock.save()
-  await kvPutAll({ stash: snap.stash, state: snap.state, index: snap.index })
+  const [stash, state, index] = await Promise.all([
+    sealBytes(snap.stash, unlockedXprv, STOCK_INFO),
+    sealBytes(snap.state, unlockedXprv, STOCK_INFO),
+    sealBytes(snap.index, unlockedXprv, STOCK_INFO),
+  ])
+  await kvPutAll({ stash, state, index })
 }
 
 // The wallet's own outpoints (`txid:vout`), by scanning its derived addresses on
@@ -510,10 +559,12 @@ export async function walletSnapshot(network = 'signet'): Promise<WalletSnapshot
 export async function createWallet(password: string): Promise<GeneratedWallet> {
   const w = generateWallet()
   const vault = await encryptSeed(w.mnemonic, password)
-  await openStock() // ensures a stock exists + persisted
-  // Cache only the derived account xprv (not the mnemonic). The caller still gets
-  // the mnemonic back to display once for backup; it isn't persisted to session.
+  // Cache the derived account xprv (not the mnemonic) FIRST — openStock/persist
+  // seal the stock under it, so it must be set before the stock is written. The
+  // caller still gets the mnemonic back to display once for backup; it isn't
+  // persisted to session.
   unlockedXprv = accountXprvFromMnemonic(w.mnemonic)
+  await openStock() // ensures a stock exists + is persisted (encrypted)
   // Descriptor is encrypted at rest under an xprv-derived key (#1).
   const descriptor = await encryptDescriptor(w.descriptor, unlockedXprv)
   await kvPutAll({ descriptor, vault })
