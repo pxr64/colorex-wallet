@@ -5,7 +5,7 @@
 
 import { rgbReady, wasm } from './rgb'
 import { accountXprvFromMnemonic, generateWallet, type GeneratedWallet } from './keys'
-import { decryptSeed, encryptSeed, type Vault } from './vault'
+import { decryptSeed, encryptSeed, isLegacyVault, type Vault } from './vault'
 import { addressUtxos, witnessOrds, type Utxo } from './esplora'
 import type { DecodedPsbt } from '../colorex/sign-request'
 
@@ -67,6 +67,115 @@ async function kvPutAll(entries: Record<string, unknown>): Promise<void> {
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error)
   })
+}
+
+async function kvDelete(keys: string[]): Promise<void> {
+  const conn = await db()
+  return new Promise((resolve, reject) => {
+    const tx = conn.transaction(STORE_NAME, 'readwrite')
+    const os = tx.objectStore(STORE_NAME)
+    for (const k of keys) os.delete(k)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
+// --- descriptor encryption at rest (#1) ---
+// The bp-std descriptor embeds the account XPUB; stored in the clear it lets anyone
+// with disk access derive every address the wallet ever uses (a privacy leak — the
+// whole transaction history, linkable). We encrypt it at rest under a key HKDF'd
+// from the unlocked account XPRV, which lives ONLY in the hot session (memory), so
+// the on-disk blob is opaque without an unlock. This is privacy-only, not a key
+// secret: the XPUB is fully derivable from the XPRV anyway — binding its at-rest
+// key to the XPRV loses nothing and costs nothing. The trade-off: address
+// derivation / balances need an unlocked session (was: worked while locked).
+
+interface EncBlob {
+  salt: Uint8Array
+  iv: Uint8Array
+  ct: Uint8Array
+}
+
+const enc = (s: string): Uint8Array => new TextEncoder().encode(s)
+const bsrc = (u: Uint8Array): BufferSource => u as unknown as BufferSource
+
+// HKDF-SHA256 from the high-entropy account XPRV — no slow KDF needed (the input
+// is already secret + high-entropy; HKDF just shapes it into an AES key).
+async function descriptorKey(xprv: string, salt: Uint8Array): Promise<CryptoKey> {
+  const ikm = await crypto.subtle.importKey('raw', bsrc(enc(xprv)), 'HKDF', false, ['deriveKey'])
+  return crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: bsrc(salt), info: bsrc(enc('colorex-descriptor-v1')) },
+    ikm,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt'],
+  )
+}
+
+async function encryptDescriptor(descriptor: string, xprv: string): Promise<EncBlob> {
+  const salt = crypto.getRandomValues(new Uint8Array(16))
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const key = await descriptorKey(xprv, salt)
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: bsrc(iv) }, key, bsrc(enc(descriptor))))
+  return { salt, iv, ct }
+}
+
+async function decryptDescriptor(blob: EncBlob, xprv: string): Promise<string> {
+  const key = await descriptorKey(xprv, blob.salt)
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: bsrc(blob.iv) }, key, bsrc(blob.ct))
+  return new TextDecoder().decode(pt)
+}
+
+// --- unlock rate-limiting (#1) ---
+// Brute-forcing a stolen device is throttled by escalating lockouts that PERSIST
+// across popup closes (chrome.storage.local — survives the ephemeral worker too).
+// The first LOCK_FREE_TRIES wrong guesses are free (fat-finger tolerance); after
+// that each failure imposes a growing cooldown. Combined with the Argon2id KDF
+// (each guess already costs ~19 MiB + real time), this makes online brute force
+// against the popup impractical without UX pain for a legitimate typo.
+interface UnlockGuard {
+  fails: number
+  lockedUntil: number
+}
+const GUARD_KEY = 'unlockGuard'
+const LOCK_FREE_TRIES = 5
+// Cooldown applied on the Nth failure once past the free tries (clamped to last).
+const LOCKOUT_STEPS_MS = [30_000, 60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000, 60 * 60_000]
+// Optional destructive backstop: wipe the vault after this many consecutive fails.
+// DISABLED by default (0) — the encrypted vault IS the user's funds, and an
+// auto-wipe is a griefing/DoS footgun + risks loss if their recovery phrase backup
+// is imperfect. The Argon2id KDF + lockouts already make brute force impractical.
+// Set > 0 only with an explicit, well-understood recovery story.
+const WIPE_AFTER_FAILS = 0
+
+async function readGuard(): Promise<UnlockGuard> {
+  try {
+    const { [GUARD_KEY]: g } = await chrome.storage.local.get(GUARD_KEY)
+    return (g as UnlockGuard | undefined) ?? { fails: 0, lockedUntil: 0 }
+  } catch {
+    return { fails: 0, lockedUntil: 0 }
+  }
+}
+
+async function writeGuard(g: UnlockGuard): Promise<void> {
+  try {
+    await chrome.storage.local.set({ [GUARD_KEY]: g })
+  } catch {
+    /* storage unavailable — fail open (no lockout) rather than brick unlock */
+  }
+}
+
+async function clearGuard(): Promise<void> {
+  try {
+    await chrome.storage.local.remove(GUARD_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+function lockoutFor(fails: number): number {
+  const i = Math.min(fails - LOCK_FREE_TRIES, LOCKOUT_STEPS_MS.length - 1)
+  return i < 0 ? 0 : LOCKOUT_STEPS_MS[i]
 }
 
 type Stock = InstanceType<typeof wasm.RgbStock>
@@ -153,21 +262,72 @@ export async function signingKey(): Promise<string | null> {
   return unlockedXprv
 }
 
-/** Decrypt the vault with `password`, derive + cache the account xprv. Returns
- *  false on a wrong password (AES-GCM auth failure) or if no wallet exists. The
+/** The outcome of an unlock attempt. `wrong` carries how many free tries remain
+ *  before lockouts begin; `locked` carries the remaining cooldown so the UI can
+ *  count down. `wiped` only occurs if WIPE_AFTER_FAILS is enabled. */
+export type UnlockResult =
+  | { ok: true }
+  | { ok: false; reason: 'no-wallet' }
+  | { ok: false; reason: 'wrong'; triesLeft: number }
+  | { ok: false; reason: 'locked'; retryInMs: number }
+  | { ok: false; reason: 'wiped' }
+
+/** Decrypt the vault with `password`, derive + cache the account xprv. Wrong
+ *  passwords are rate-limited (escalating lockouts that persist across popup
+ *  closes). On success, opportunistically upgrades a legacy PBKDF2 vault to
+ *  Argon2id and a plaintext descriptor to its encrypted-at-rest form. The
  *  decrypted mnemonic is used only to derive the account key, then dropped — it is
  *  never persisted to the hot session. */
-export async function unlock(password: string): Promise<boolean> {
+export async function unlock(password: string): Promise<UnlockResult> {
   const vault = await kvGet<Vault>('vault')
-  if (!vault) return false
+  if (!vault) return { ok: false, reason: 'no-wallet' }
+
+  const guard = await readGuard()
+  if (guard.lockedUntil > Date.now()) {
+    return { ok: false, reason: 'locked', retryInMs: guard.lockedUntil - Date.now() }
+  }
+
+  let mnemonic: string
   try {
-    const mnemonic = await decryptSeed(vault, password)
-    unlockedXprv = accountXprvFromMnemonic(mnemonic)
-    await openStock()
-    await persistSession(unlockedXprv)
-    return true
+    mnemonic = await decryptSeed(vault, password)
   } catch {
-    return false
+    // Wrong password (AES-GCM auth failure) — bump the guard.
+    const fails = guard.fails + 1
+    if (WIPE_AFTER_FAILS > 0 && fails >= WIPE_AFTER_FAILS) {
+      await wipeWallet()
+      return { ok: false, reason: 'wiped' }
+    }
+    const lockedUntil = fails >= LOCK_FREE_TRIES ? Date.now() + lockoutFor(fails) : 0
+    await writeGuard({ fails, lockedUntil })
+    if (lockedUntil > Date.now()) return { ok: false, reason: 'locked', retryInMs: lockedUntil - Date.now() }
+    return { ok: false, reason: 'wrong', triesLeft: Math.max(0, LOCK_FREE_TRIES - fails) }
+  }
+
+  // Correct password — reset the guard, unlock, and upgrade stored formats.
+  await clearGuard()
+  unlockedXprv = accountXprvFromMnemonic(mnemonic)
+  const upgrades: Record<string, unknown> = {}
+  if (isLegacyVault(vault)) upgrades.vault = await encryptSeed(mnemonic, password)
+  const rawDesc = await kvGet<string | EncBlob>('descriptor')
+  if (typeof rawDesc === 'string') upgrades.descriptor = await encryptDescriptor(rawDesc, unlockedXprv)
+  if (Object.keys(upgrades).length) await kvPutAll(upgrades)
+  await openStock()
+  await persistSession(unlockedXprv)
+  return { ok: true }
+}
+
+/** Destructive: erase all wallet state (vault, descriptor, RGB stock) and clear
+ *  the session + guard. Used only by the optional wipe-after-N-failures backstop
+ *  (disabled by default). Recovery is via the BIP-39 phrase only. */
+async function wipeWallet(): Promise<void> {
+  unlockedXprv = null
+  stock = null
+  await kvDelete(['vault', 'descriptor', 'stash', 'state', 'index'])
+  await clearGuard()
+  try {
+    await chrome.storage.session.remove(SESSION_KEY)
+  } catch {
+    /* ignore */
   }
 }
 
@@ -351,16 +511,32 @@ export async function createWallet(password: string): Promise<GeneratedWallet> {
   const w = generateWallet()
   const vault = await encryptSeed(w.mnemonic, password)
   await openStock() // ensures a stock exists + persisted
-  await kvPutAll({ descriptor: w.descriptor, vault })
   // Cache only the derived account xprv (not the mnemonic). The caller still gets
   // the mnemonic back to display once for backup; it isn't persisted to session.
   unlockedXprv = accountXprvFromMnemonic(w.mnemonic)
+  // Descriptor is encrypted at rest under an xprv-derived key (#1).
+  const descriptor = await encryptDescriptor(w.descriptor, unlockedXprv)
+  await kvPutAll({ descriptor, vault })
+  await clearGuard()
   await persistSession(unlockedXprv)
   return w
 }
 
+/** The bp-std descriptor, decrypted. Requires an unlocked session (the at-rest
+ *  blob is encrypted under an xprv-derived key) — returns undefined while locked,
+ *  so balance/address derivation is gated behind unlock. A not-yet-migrated
+ *  plaintext descriptor (legacy) is returned as-is. */
 export async function getDescriptor(): Promise<string | undefined> {
-  return kvGet<string>('descriptor')
+  const raw = await kvGet<string | EncBlob>('descriptor')
+  if (raw == null) return undefined
+  if (typeof raw === 'string') return raw // legacy plaintext (migrates on next unlock)
+  const xprv = await signingKey()
+  if (!xprv) return undefined
+  try {
+    return await decryptDescriptor(raw, xprv)
+  } catch {
+    return undefined
+  }
 }
 
 /** Derive a fresh keychain-10 RGB receive address. */

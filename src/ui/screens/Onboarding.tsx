@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { T } from '../theme'
 import { Icon, Logo, Mono } from '../atoms'
 import { createWallet, receiveAddress } from '../../wallet/store'
+import { passwordStrength } from '../../wallet/password'
 
 interface Generated {
   mnemonic: string
@@ -19,11 +20,16 @@ export function Onboarding({ onDone, onBack }: { onDone: () => void; onBack: () 
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const canCreate = pw.length >= 8 && pw === pw2
+  const strength = useMemo(() => passwordStrength(pw), [pw])
+  const canCreate = strength.ok && pw === pw2
 
   async function create() {
-    if (!canCreate) {
-      setError('Password must be at least 8 characters and match.')
+    if (!strength.ok) {
+      setError(strength.hint ?? 'Choose a stronger password.')
+      return
+    }
+    if (pw !== pw2) {
+      setError('Passwords do not match.')
       return
     }
     setBusy(true)
@@ -56,7 +62,11 @@ export function Onboarding({ onDone, onBack }: { onDone: () => void; onBack: () 
             </div>
             <div style={{ display: 'grid', gap: 9 }}>
               <PwInput value={pw} onChange={setPw} show={show} onToggle={() => setShow((v) => !v)} placeholder="Password (min 8)" />
+              {pw && <StrengthMeter score={strength.score} label={strength.label} hint={strength.hint} />}
               <PwInput value={pw2} onChange={setPw2} show={show} onToggle={() => setShow((v) => !v)} placeholder="Confirm password" />
+              {pw2 && pw !== pw2 && (
+                <Mono style={{ fontSize: 10, color: T.accent }}>Passwords don't match.</Mono>
+              )}
             </div>
           </div>
         ) : (
@@ -116,6 +126,33 @@ function PwInput({ value, onChange, show, onToggle, placeholder }: { value: stri
       <button className="cxw-btn" onClick={onToggle} style={{ border: 'none', background: 'transparent', color: T.faint, padding: 4 }}>
         {show ? <Icon.eyeOff /> : <Icon.eye />}
       </button>
+    </div>
+  )
+}
+
+function StrengthMeter({ score, label, hint }: { score: number; label: string; hint?: string }) {
+  // 0 very weak → 4 very strong. Color ramps red → amber → green.
+  const color = score <= 0 ? T.accent : score === 1 ? T.warn : score === 2 ? T.warn : T.ok
+  return (
+    <div style={{ display: 'grid', gap: 4 }}>
+      <div style={{ display: 'flex', gap: 4 }}>
+        {[0, 1, 2, 3].map((i) => (
+          <div
+            key={i}
+            style={{
+              flex: 1,
+              height: 4,
+              borderRadius: 2,
+              background: i < score ? color : T.hairStrong,
+              transition: 'background 160ms ease',
+            }}
+          />
+        ))}
+      </div>
+      <Mono style={{ fontSize: 9.5, color: score >= 3 ? T.ok : T.mute }}>
+        {label}
+        {hint ? ` · ${hint}` : ''}
+      </Mono>
     </div>
   )
 }
