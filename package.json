@@ -5,29 +5,34 @@
   "description": "Colorex RGB wallet — MV3 browser extension (taker wallet for the Colorex RFQ exchange).",
   "license": "MIT",
   "type": "module",
+  "packageManager": "pnpm@10.23.0",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "vite",
     "build": "npm run build:wasm && tsc --noEmit && vite build",
     "build:wasm": "cd rgb-wasm && wasm-pack build --target web",
     "typecheck": "tsc --noEmit",
+    "check:supply-chain": "node scripts/check-supply-chain.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@noble/hashes": "^1.8.0",
-    "@scure/bip32": "^1.7.0",
-    "@scure/bip39": "^1.6.0",
-    "@scure/btc-signer": "^2.2.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "@noble/hashes": "1.8.0",
+    "@scure/bip32": "1.7.0",
+    "@scure/bip39": "1.6.0",
+    "@scure/btc-signer": "2.2.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
-    "@crxjs/vite-plugin": "^2.0.0-beta.26",
-    "@types/chrome": "^0.0.270",
-    "@types/node": "^20.14.0",
-    "@types/react": "^18.3.3",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
-    "typescript": "^5.5.4",
-    "vite": "^5.4.0"
+    "@crxjs/vite-plugin": "2.4.0",
+    "@types/chrome": "0.0.270",
+    "@types/node": "20.19.42",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "4.7.0",
+    "typescript": "5.9.3",
+    "vite": "5.4.21"
   }
 }

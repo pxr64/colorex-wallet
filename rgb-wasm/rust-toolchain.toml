@@ -1,0 +1,12 @@
+# Pin the Rust toolchain so the shipped .wasm is reproducible across machines/CI
+# (#1, supply chain). rustup auto-installs this exact toolchain + the wasm target
+# when building here, so a `wasm-pack build` doesn't drift with whatever stable is
+# current on the builder. Bump deliberately (and re-verify the build) when upgrading.
+#
+# Combined with the committed rgb-wasm/Cargo.lock (pinned crate graph), this fixes
+# the inputs to the wasm build. NOTE: byte-identical output across machines may also
+# require stripping embedded build paths — e.g. RUSTFLAGS="--remap-path-prefix=$PWD=.".
+[toolchain]
+channel = "1.91.1"
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

@@ -131,8 +131,12 @@ running inside the extension can reach the session key and sign. Mitigations
 - The mnemonic is confined to the unlock/create moment and the vault, not the
   session — so even a compromised context leaks *this account's* key, not the
   portable phrase.
-- Supply-chain hardening (pin/audit deps, reproducible wasm, anti-exfil lint) is an
-  open item.
+- Supply-chain controls (CI): pinned deps + frozen lockfile, pinned Rust toolchain
+  for a reproducible wasm build (double-build hash check), and an **anti-exfil
+  guard** (`scripts/check-supply-chain.mjs`) that fails the build on a new network
+  egress site, a non-allowlisted host, a telemetry dependency, key/network-layer
+  entanglement, or a loosened CSP. Heuristic, not a proof — it makes the easy
+  regressions loud; a path laundered through an allowlisted file still needs review.
 
 ### 8. Screen / clipboard exposure of the recovery phrase
 
@@ -164,7 +168,5 @@ or use the RGB anyway). This is the accepted cost of privacy-at-rest.
   seed off-device entirely (removes threat #7's ceiling for them).
 - **wasm-boundary audit** — verify keys passed into wasm aren't retained/logged and
   no remote/eval'd code runs under `wasm-unsafe-eval`.
-- **Supply chain** — dep pinning/audit, reproducible wasm build, verify the shipped
-  `.wasm` matches source, anti-exfil lint/test.
 - **Indexer trust** — the wallet trusts the RGB transport / Esplora for chain state.
 - The **broker/maker** (separate private repo) and the **Bitcoin/RGB networks**.
