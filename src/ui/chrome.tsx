@@ -5,6 +5,7 @@ import { type ReactNode, useState } from 'react'
 import { T } from './theme'
 import { AccountAvatar, Icon, Mono } from './atoms'
 import { ACCOUNT } from './data'
+import { copyAutoClear } from './clipboard'
 
 export function TopBar({ onLock }: { onLock: () => void }) {
   return (
@@ -39,17 +40,19 @@ export function SubHeader({ title, onBack, right }: { title: string; onBack: () 
   )
 }
 
-export function CopyChip({ text, label }: { text: string; label?: string }) {
+// `sensitive` copies (recovery phrase, addresses) auto-clear from the clipboard
+// after a short TTL (#1) and say so on the chip while the copy is live.
+export function CopyChip({ text, label, sensitive }: { text: string; label?: string; sensitive?: boolean }) {
   const [done, setDone] = useState(false)
   function copy() {
-    void navigator.clipboard?.writeText(text).catch(() => {})
+    void copyAutoClear(text)
     setDone(true)
-    setTimeout(() => setDone(false), 1300)
+    setTimeout(() => setDone(false), sensitive ? 2600 : 1300)
   }
   return (
     <button className="cxw-btn" onClick={copy} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 9px', border: `1px solid ${T.hair}`, borderRadius: 8, background: T.card, color: done ? T.ok : T.inkSoft, fontFamily: T.mono, fontSize: 10.5 }}>
       {done ? <Icon.check /> : <Icon.copy />}
-      {done ? 'Copied' : label || 'Copy'}
+      {done ? (sensitive ? 'Copied · clears in 30s' : 'Copied') : label || 'Copy'}
     </button>
   )
 }

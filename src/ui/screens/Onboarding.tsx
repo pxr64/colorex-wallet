@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { T } from '../theme'
 import { Icon, Logo, Mono } from '../atoms'
+import { CopyChip } from '../chrome'
 import { createWallet, receiveAddress } from '../../wallet/store'
 import { passwordStrength } from '../../wallet/password'
 
@@ -79,9 +80,9 @@ export function Onboarding({ onDone, onBack }: { onDone: () => void; onBack: () 
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px', border: `1px dashed ${T.hairStrong}`, borderRadius: 12, background: T.accentSoft }}>
               <span style={{ color: T.accent, flex: '0 0 auto', marginTop: 1 }}><Icon.shield /></span>
-              <Mono style={{ fontSize: 10.5, color: T.inkSoft }}><span style={{ lineHeight: 1.5 }}>Write down your recovery phrase and store it offline. It's the only way to restore this wallet.</span></Mono>
+              <Mono style={{ fontSize: 10.5, color: T.inkSoft }}><span style={{ lineHeight: 1.5 }}>Write down your recovery phrase and store it offline. It's the only way to restore this wallet — anyone who sees it controls your funds, so don't screenshot or paste it online.</span></Mono>
             </div>
-            <Field label="Recovery phrase">{gen.mnemonic}</Field>
+            <RecoveryPhrase mnemonic={gen.mnemonic} />
             <Field label="RGB receive address (keychain-10)">{gen.address}</Field>
           </div>
         )}
@@ -126,6 +127,48 @@ function PwInput({ value, onChange, show, onToggle, placeholder }: { value: stri
       <button className="cxw-btn" onClick={onToggle} style={{ border: 'none', background: 'transparent', color: T.faint, padding: 4 }}>
         {show ? <Icon.eyeOff /> : <Icon.eye />}
       </button>
+    </div>
+  )
+}
+
+// Reveal-gated recovery phrase (#1): hidden behind a tap so it isn't shown (or
+// caught by a passing screenshot/shoulder-surfer) the instant the wallet is made.
+// Copy auto-clears from the clipboard after a short TTL (see CopyChip `sensitive`).
+function RecoveryPhrase({ mnemonic }: { mnemonic: string }) {
+  const [revealed, setRevealed] = useState(false)
+  const words = mnemonic.split(' ')
+  return (
+    <div style={{ border: `1px solid ${T.hair}`, borderRadius: 12, padding: '9px 12px', background: T.card }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 7 }}>
+        <Mono style={{ fontSize: 9.5, color: T.mute, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Recovery phrase</Mono>
+        {revealed && (
+          <div style={{ display: 'flex', gap: 6 }}>
+            <CopyChip text={mnemonic} sensitive />
+            <button className="cxw-btn" onClick={() => setRevealed(false)} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 9px', border: `1px solid ${T.hair}`, borderRadius: 8, background: T.card, color: T.inkSoft, fontFamily: T.mono, fontSize: 10.5 }}>
+              <Icon.eyeOff /> Hide
+            </button>
+          </div>
+        )}
+      </div>
+      <div style={{ position: 'relative' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, filter: revealed ? 'none' : 'blur(7px)', userSelect: revealed ? 'auto' : 'none', transition: 'filter 160ms ease' }}>
+          {words.map((w, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 5, padding: '5px 7px', border: `1px solid ${T.hair}`, borderRadius: 8, background: T.bg }}>
+              <Mono style={{ fontSize: 8.5, color: T.faint }}>{i + 1}</Mono>
+              <Mono style={{ fontSize: 11, color: T.ink }}>{revealed ? w : '••••'}</Mono>
+            </div>
+          ))}
+        </div>
+        {!revealed && (
+          <button
+            className="cxw-btn"
+            onClick={() => setRevealed(true)}
+            style={{ position: 'absolute', inset: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 7, border: 'none', borderRadius: 8, background: 'rgba(0,0,0,0.02)', color: T.accent, fontFamily: T.body, fontSize: 12.5, fontWeight: 600 }}
+          >
+            <Icon.eye /> Tap to reveal
+          </button>
+        )}
+      </div>
     </div>
   )
 }

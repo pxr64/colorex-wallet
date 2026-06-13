@@ -127,7 +127,7 @@ export function Home({ onLock, onSign }: { onLock: () => void; onSign: () => voi
           <div className="cxw-in" style={{ marginTop: 12, border: `1px solid ${T.hair}`, borderRadius: 14, background: T.bg, padding: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <Eyebrow>RGB receive address</Eyebrow>
-              {addr && <CopyChip text={addr} />}
+              {addr && <CopyChip text={addr} sensitive />}
             </div>
             <Mono style={{ fontSize: 11.5, color: addr ? T.ink : T.faint }}>
               <span style={{ lineHeight: 1.6, wordBreak: 'break-all' }}>{addr ?? 'No wallet.'}</span>
