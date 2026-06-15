@@ -53,16 +53,17 @@ export function App() {
   )
 
   if (approvalId) {
-    // Connect needs no key — the address comes from the public descriptor and
-    // approving only records the origin — so don't make the user unlock for it.
-    // Signing stays gated on unlock: the user authenticates here, which also puts
-    // the derived account key in the shared session so the WORKER can sign (the
+    // Both connect and sign gate on unlock. The descriptor is encrypted at rest
+    // (#1), so even deriving the account address for connect needs the key —
+    // getAccounts() returns [] while locked, so an approved-but-locked connect
+    // would leave the dApp with no account. Unlocking here also mirrors the
+    // derived account key into the shared session so the WORKER can sign (the
     // approval window itself never holds a key — worker-confined signing, #2).
-    if (approvalKind === 'connect') {
-      return shell(<ConnectScreen requestId={approvalId} />)
-    }
     if (!approvalUnlocked) {
       return shell(<Lock onUnlock={() => setApprovalUnlocked(true)} onSetup={() => undefined} />)
+    }
+    if (approvalKind === 'connect') {
+      return shell(<ConnectScreen requestId={approvalId} />)
     }
     return shell(<SignScreen requestId={approvalId} />)
   }
