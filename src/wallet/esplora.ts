@@ -70,3 +70,45 @@ export async function witnessOrds(
     }),
   )
 }
+
+// --- SPV self-fetch primitives (RFQIP-1) ---------------------------------------------
+// Raw esplora reads the SPV mined-ancestry verifier needs. The wallet fetches a witness's
+// merkle proof + the block header itself, then verifies locally in wasm
+// (`verify_consignment_spv`) — so a lying esplora can only cause a verify *failure*, never a
+// false accept. Trust-tier wiring (which headers to trust, how) lands separately.
+
+/** A tx's Bitcoin merkle-inclusion proof — esplora `GET /tx/:txid/merkle-proof`. `merkle`
+ *  is the branch of sibling hashes (display-order hex); `pos` fixes left/right direction. */
+export interface MerkleProof {
+  block_height: number
+  merkle: string[]
+  pos: number
+}
+
+/** GET /tx/:txid/merkle-proof. Throws if the tx is unconfirmed/unknown (esplora 4xx). */
+export async function txMerkleProof(txid: string, base: string = ESPLORA_SIGNET): Promise<MerkleProof> {
+  const res = await fetch(`${base}/tx/${txid}/merkle-proof`)
+  if (!res.ok) throw new Error(`esplora /tx/${txid}/merkle-proof → ${res.status}`)
+  return (await res.json()) as MerkleProof
+}
+
+/** GET /block-height/:height → the block hash at that height (display-order hex). */
+export async function blockHashAtHeight(height: number, base: string = ESPLORA_SIGNET): Promise<string> {
+  const res = await fetch(`${base}/block-height/${height}`)
+  if (!res.ok) throw new Error(`esplora /block-height/${height} → ${res.status}`)
+  return (await res.text()).trim()
+}
+
+/** GET /block/:hash/header → the raw 80-byte block header as hex. */
+export async function blockHeader(hash: string, base: string = ESPLORA_SIGNET): Promise<string> {
+  const res = await fetch(`${base}/block/${hash}/header`)
+  if (!res.ok) throw new Error(`esplora /block/${hash}/header → ${res.status}`)
+  return (await res.text()).trim()
+}
+
+/** Current chain tip height — GET /blocks/tip/height. Used to compute confirmation depth. */
+export async function tipHeight(base: string = ESPLORA_SIGNET): Promise<number> {
+  const res = await fetch(`${base}/blocks/tip/height`)
+  if (!res.ok) throw new Error(`esplora /blocks/tip/height → ${res.status}`)
+  return Number((await res.text()).trim())
+}

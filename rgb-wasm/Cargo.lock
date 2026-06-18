@@ -1141,7 +1141,9 @@ dependencies = [
  "bp-wallet",
  "getrandom 0.2.17",
  "rgb-api",
+ "serde",
  "serde_json",
+ "sha2",
  "strict_encoding",
  "wasm-bindgen",
 ]

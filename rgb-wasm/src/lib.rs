@@ -31,6 +31,9 @@ use rgb::{ChainNet, ContractId, OutputSeal, RgbDescr, RgbKeychain, StateType, Ta
 use strict_encoding::{StrictDeserialize, StrictSerialize};
 use wasm_bindgen::prelude::*;
 
+// Vendored SPV consignment verifier (pure merkle + header validation). See spv/mod.rs.
+mod spv;
+
 // Network-agnostic NIA (Non-Inflatable Asset) schema kit — same artifact the
 // exchange backend embeds.
 const NIA_SCHEMA_KIT: &[u8] = include_bytes!("../schemas/NonInflatableAsset.rgb");
@@ -86,6 +89,61 @@ pub fn parse_invoice(invoice: &str) -> Result<String, JsError> {
     let parsed = rgb::invoice::RgbInvoice::from_str(invoice)
         .map_err(|e| JsError::new(&format!("invalid RGB invoice: {e:?}")))?;
     Ok(parsed.to_string())
+}
+
+/// SPV mined-ancestry verification (RFQIP-1), fully client-side. The wallet self-fetches the
+/// proof-pack + headers from esplora and calls this before signing/accepting; a lying source
+/// can only cause a verification *failure*, never a false accept. Trust-critical merkle +
+/// header validation runs here in wasm, never in JS.
+///
+/// - `witness_txids_json` — from [`RgbStock::consignment_witness_ids`].
+/// - `exempt_txids_json` — `[]` on sell; the not-yet-broadcast swap tx on buy.
+/// - `pack_json` — an `SpvProofPack` the wallet assembled from esplora merkle proofs.
+/// - `checkpoint_json` — `{ "height", "block_hash" }` baked into the wallet.
+/// - `headers_hex_json` — contiguous 80-byte headers (hex) from the checkpoint.
+/// - `network`, `min_confs` — see [`spv_recommended_confs`].
+///
+/// Returns the `SpvVerdict` as JSON (`{ all_mined, rejected, checked }`).
+#[wasm_bindgen]
+pub fn verify_consignment_spv(
+    witness_txids_json: &str,
+    exempt_txids_json: &str,
+    pack_json: &str,
+    checkpoint_json: &str,
+    headers_hex_json: &str,
+    network: &str,
+    min_confs: u32,
+) -> Result<String, JsError> {
+    let witness_txids: Vec<String> = serde_json::from_str(witness_txids_json)
+        .map_err(|e| JsError::new(&format!("witness_txids: {e}")))?;
+    let exempt: HashSet<String> = serde_json::from_str::<Vec<String>>(exempt_txids_json)
+        .map_err(|e| JsError::new(&format!("exempt: {e}")))?
+        .into_iter()
+        .collect();
+    let pack = spv::SpvProofPack::from_json(pack_json.as_bytes()).map_err(|e| JsError::new(&e))?;
+    let checkpoint: spv::Checkpoint = serde_json::from_str(checkpoint_json)
+        .map_err(|e| JsError::new(&format!("checkpoint: {e}")))?;
+    let headers_hex: Vec<String> = serde_json::from_str(headers_hex_json)
+        .map_err(|e| JsError::new(&format!("headers: {e}")))?;
+    let headers: Vec<Vec<u8>> = headers_hex
+        .iter()
+        .map(|h| spv::merkle::hex_to_bytes(h).ok_or_else(|| JsError::new("header is not valid hex")))
+        .collect::<Result<_, _>>()?;
+    let net = spv::Network::from_label(network)
+        .ok_or_else(|| JsError::new(&format!("unknown network `{network}`")))?;
+    let source = spv::CheckpointHeaderSource::new(net, &checkpoint, &headers)
+        .map_err(|e| JsError::new(&e))?;
+    let verdict = spv::verify_pack(&witness_txids, &exempt, &pack, &source, min_confs);
+    serde_json::to_string(&verdict).map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Recommended confirmation depth K for a network (mainnet 6 / testnet 3 / signet+regtest 1),
+/// so the wallet doesn't hardcode the policy.
+#[wasm_bindgen]
+pub fn spv_recommended_confs(network: &str) -> u32 {
+    spv::Network::from_label(network)
+        .map(|n| n.recommended_confs())
+        .unwrap_or(1)
 }
 
 /// Prove the bitcoin wallet runs in wasm: from a BIP-86 tapret descriptor
