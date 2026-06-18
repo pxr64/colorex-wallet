@@ -6,9 +6,12 @@
 //! (see CLAUDE.md "Public repo — guardrails"), so the trust-critical verifier is vendored
 //! instead of imported. It is generic SPV/merkle code with no exchange internals.
 //!
-//! **Keep in sync** with `rgb-rfq/crates/rfq-consignment/src/{merkle,proofpack,verify,headers}.rs`.
-//! The only edit applied on vendoring is the module path rewrite
-//! `crate::{merkle,proofpack,verify}::` → `crate::spv::$1::` (these live under `spv` here).
+//! **Keep in sync** with
+//! `rgb-rfq/crates/rfq-consignment/src/{merkle,proofpack,verify,headers,difficulty}.rs`.
+//! Edits applied on vendoring: the module path rewrite
+//! `crate::{merkle,proofpack,verify,difficulty}::` → `crate::spv::$1::`, and `difficulty.rs`'s
+//! `#[cfg(test)]` block is stripped (it differential-tests against the `bitcoin` dev-dep,
+//! which runs upstream only — we don't pull rust-bitcoin into the wallet).
 //!
 //! Pure: depends only on `sha2` + `serde` — no electrum, no chain access. The JS host
 //! supplies merkle proofs + headers (self-fetched from esplora); a lying source can only
@@ -20,11 +23,12 @@
 // trimmed (which would cause drift).
 #![allow(dead_code, unused_imports)]
 
+pub mod difficulty;
 pub mod headers;
 pub mod merkle;
 pub mod proofpack;
 pub mod verify;
 
-pub use headers::{Checkpoint, CheckpointHeaderSource, Network};
+pub use headers::{nearest_checkpoint, Checkpoint, CheckpointHeaderSource, Network};
 pub use proofpack::{SpvProofPack, WitnessInclusion};
 pub use verify::{verify_pack, HeaderInfo, HeaderSource, RejectReason, SpvVerdict};
