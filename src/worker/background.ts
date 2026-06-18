@@ -22,6 +22,7 @@ import {
 } from '../wallet/store'
 import { signPsbt } from '../wallet/sign'
 import { describeRejections, verifyMinedAncestry } from '../wallet/spv-verify'
+import { extendLocalCheckpoints } from '../wallet/checkpoint-extend'
 import { drain, enqueue, getQueue, removeItem } from '../wallet/import-queue'
 import type { SignRequest, SignResult } from '../types/sign-request'
 import type {
@@ -83,15 +84,52 @@ async function ensureDrainAlarm(): Promise<void> {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === DRAIN_ALARM) void drain()
+  if (alarm.name === CHECKPOINT_ALARM) void catchUpCheckpoints()
 })
 chrome.runtime.onStartup.addListener(() => {
   void ensureDrainAlarm()
   void drain()
+  void ensureCheckpointAlarm()
+  void catchUpCheckpoints()
 })
-chrome.runtime.onInstalled.addListener(() => void ensureDrainAlarm())
+chrome.runtime.onInstalled.addListener(() => {
+  void ensureDrainAlarm()
+  void ensureCheckpointAlarm()
+})
 // Kick once on every worker spin-up (covers the wake that revived the worker).
 void ensureDrainAlarm()
 void drain()
+void ensureCheckpointAlarm()
+void catchUpCheckpoints()
+
+// --- background checkpoint extension (SPV stage 3) ---
+// Grow the LOCAL checkpoint store forward from its trusted frontier so the nearest
+// checkpoint stays ≤ one epoch below even recently-mined witnesses (otherwise SPV
+// header runs lengthen as the chain advances past the baked table). Each call does
+// bounded work (≤ one epoch) and persists, so it resumes safely across worker
+// wakeups; we loop until caught up (added === 0) or a small per-wake cap. Validation
+// happens in wasm against an already-trusted anchor — a lying esplora can only stall,
+// never inject a forged checkpoint. Epochs are ~2 weeks, so an hourly poll is ample.
+const CHECKPOINT_ALARM = 'spv-checkpoint-extend'
+const NETWORK = 'signet'
+const MAX_EPOCHS_PER_WAKE = 8 // backstop; one frontier-to-tip catch-up is normally ≤1
+
+async function ensureCheckpointAlarm(): Promise<void> {
+  if (!(await chrome.alarms.get(CHECKPOINT_ALARM))) {
+    await chrome.alarms.create(CHECKPOINT_ALARM, { periodInMinutes: 60 })
+  }
+}
+
+async function catchUpCheckpoints(): Promise<void> {
+  try {
+    for (let i = 0; i < MAX_EPOCHS_PER_WAKE; i++) {
+      const { added } = await extendLocalCheckpoints(NETWORK)
+      if (added === 0) break
+    }
+  } catch (e) {
+    console.warn('checkpoint extend failed (will retry next alarm):', e)
+  }
+}
 
 // --- idle / OS-lock auto-lock (#2) ---
 // Wipe the unlocked account key when the user goes idle for AUTO_LOCK_SECS or the

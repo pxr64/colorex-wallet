@@ -189,6 +189,33 @@ pub fn verify_consignment_spv_segments(
     serde_json::to_string(&verdict).map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// Validate a forward header run from a trusted `checkpoint` and return the epoch-boundary
+/// checkpoints inside it (JSON `[{ "height", "block_hash" }]`). The wallet's background extend
+/// task calls this to grow its local checkpoint store: fetch headers from the current frontier to
+/// the tip, validate them here (linkage [+ PoW/difficulty on mainnet]), and persist the returned
+/// checkpoints as new trusted anchors. `headers_hex_json` must be the contiguous run starting AT
+/// `checkpoint.height`.
+#[wasm_bindgen]
+pub fn extend_checkpoints(
+    network: &str,
+    checkpoint_json: &str,
+    headers_hex_json: &str,
+) -> Result<String, JsError> {
+    let net = spv::Network::from_label(network)
+        .ok_or_else(|| JsError::new(&format!("unknown network `{network}`")))?;
+    let checkpoint: spv::Checkpoint = serde_json::from_str(checkpoint_json)
+        .map_err(|e| JsError::new(&format!("checkpoint: {e}")))?;
+    let headers_hex: Vec<String> = serde_json::from_str(headers_hex_json)
+        .map_err(|e| JsError::new(&format!("headers: {e}")))?;
+    let headers: Vec<Vec<u8>> = headers_hex
+        .iter()
+        .map(|h| spv::merkle::hex_to_bytes(h).ok_or_else(|| JsError::new("header is not valid hex")))
+        .collect::<Result<_, _>>()?;
+    let source = spv::CheckpointHeaderSource::new(net, &checkpoint, &headers)
+        .map_err(|e| JsError::new(&e))?;
+    serde_json::to_string(&source.epoch_checkpoints()).map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Recommended confirmation depth K for a network (mainnet 6 / testnet 3 / signet+regtest 1),
 /// so the wallet doesn't hardcode the policy.
 #[wasm_bindgen]
