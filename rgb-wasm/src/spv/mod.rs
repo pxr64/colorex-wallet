@@ -29,6 +29,8 @@ pub mod merkle;
 pub mod proofpack;
 pub mod verify;
 
-pub use headers::{nearest_checkpoint, Checkpoint, CheckpointHeaderSource, Network};
+pub use headers::{
+    nearest_checkpoint, Checkpoint, CheckpointHeaderSource, Network, TrustedHeaderSource,
+};
 pub use proofpack::{SpvProofPack, WitnessInclusion};
 pub use verify::{verify_pack, HeaderInfo, HeaderSource, RejectReason, SpvVerdict};
