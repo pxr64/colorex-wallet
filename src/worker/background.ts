@@ -13,6 +13,7 @@ import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
 import {
   accountBalances,
+  consignmentDeliveryToMe,
   consignmentWitnessIds,
   createInvoice,
   createTransfer,
@@ -288,12 +289,21 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
   }
   const network = sdk.getNetwork()
 
-  // DECODE the dApp-provided PSBT (trustless BTC side) + assemble. The wallet
-  // never talks to the broker — the dApp orchestrated the swap and gave us the
-  // PSBT. assetId/amount are RGB display hints, validated on consignment-accept.
+  // DECODE the dApp-provided PSBT (trustless BTC side). Direction is INFERRED from the
+  // wallet's own BTC delta, never trusted from the dApp: a buy spends BTC for RGB
+  // (delta < 0); a sell receives BTC for RGB (delta >= 0).
   const decoded = await decodePsbt(intent.psbt, network)
+  const side: 'buy' | 'sell' = decoded.btcDeltaSats < 0 ? 'buy' : 'sell'
+
+  // RGB display hints. By DEFAULT these are dApp-claimed (display only, validated on
+  // consignment-accept) — used for the sell leg, where the RGB delta is the change
+  // consignment + spent seals (a later increment). For a BUY we OVERRIDE them entirely
+  // below with the wallet-derived consignment delivery, so nothing dApp-claimed reaches
+  // the confirmation's RGB row.
   let assetTicker = intent.assetId?.slice(0, 10) ?? 'RGB'
   let assetPrecision = 0
+  let contractId = intent.assetId ?? ''
+  let rgbAmountRaw = intent.amount ?? 0
   if (intent.assetId) {
     try {
       const bal = await sdk.getAssetBalance(intent.assetId)
@@ -303,6 +313,39 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
       /* unknown asset — fall back to the contract id prefix */
     }
   }
+
+  // BUY-SWAP detection is WALLET-DERIVED: an owned k10 (RGB) output on the swap tx means
+  // the wallet is receiving RGB. That — not "BTC flows out" alone — is what distinguishes
+  // a buy-swap from a plain BTC send (also btcDelta < 0, but with no k10 output), so plain
+  // sends pass through untouched. The seals we expect to receive on are those k10 outputs:
+  // `<swap_txid>:<vout>` (sourced from decode, never the dApp; a tapret host is hideable
+  // from the PSBT but our own address derivation is not).
+  const rgbReceiveSeals = decoded.outputs
+    .filter((o) => o.ours && o.keychain === 10)
+    .map((o) => `${decoded.txid}:${o.vout}`)
+  if (side === 'buy' && rgbReceiveSeals.length > 0) {
+    // The RGB the user sees MUST be wallet-derived from the maker's consignment (its
+    // delivery to OUR seals), not the dApp's claim. A buy delivering no verifiable RGB to
+    // us (no consignment, or it pays a seal we don't own → amount 0) is refused outright:
+    // signing would release BTC for RGB the wallet can't see arriving. Closes the A1
+    // fail-open by construction — a dApp omitting the consignment can't get a buy signed.
+    // (Blinded receives have no k10 output to key on; that issued-invoice fallback is a
+    // later increment. Witness-vout receives — our common path — are covered here.)
+    const delivery = intent.consignment
+      ? await consignmentDeliveryToMe(intent.consignment, rgbReceiveSeals, network)
+      : null
+    if (!delivery || delivery.amount === 0) {
+      throw new Error(
+        'refusing to sign a buy: the maker consignment delivers no verifiable RGB to your wallet ' +
+          '(missing consignment, or it pays a seal you do not own)',
+      )
+    }
+    assetTicker = delivery.ticker
+    assetPrecision = delivery.precision
+    contractId = delivery.contractId
+    rgbAmountRaw = delivery.amount
+  }
+
   const { connected = [] } = await chrome.storage.local.get('connected')
   return assembleSignRequest({
     id,
@@ -313,16 +356,13 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
     psbtBase64: intent.psbt,
     quoteId: intent.quoteId,
     makerId: intent.makerId,
-    contractId: intent.assetId ?? '',
+    contractId,
     assetTicker,
     assetPrecision,
-    rgbAmountRaw: intent.amount ?? 0,
+    rgbAmountRaw,
     // The maker's consignment, if the dApp forwarded it — drives the SPV pre-sign gate.
     consignment: intent.consignment,
-    // Direction is INFERRED from the wallet's own BTC delta, not trusted from the
-    // dApp: a buy spends BTC for RGB (delta < 0); a sell receives BTC for RGB
-    // (delta >= 0). Only orients the RGB balance-change row's sign.
-    side: decoded.btcDeltaSats < 0 ? 'buy' : 'sell',
+    side,
   })
 }
 

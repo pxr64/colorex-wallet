@@ -16,7 +16,7 @@ export interface DecodedPsbt {
   totalInSats: number
   totalOutSats: number
   inputs: Array<{ outpoint: string; valueSats: number; ours: boolean; keychain?: number; index?: number }>
-  outputs: Array<{ valueSats: number; ours: boolean }>
+  outputs: Array<{ valueSats: number; ours: boolean; vout: number; keychain?: number; index?: number }>
   // Explicit instructions for the signer: sign psbt input `index` with the key at
   // (keychain, addrIndex). Derived by matching each input's prev scriptPubkey to a
   // wallet address — not from PSBT-embedded derivation (which the maker may omit).

@@ -18,9 +18,10 @@ use amplify::confinement::Confined;
 use bpstd::psbt::Psbt;
 use bpstd::{Address, Keychain, Network, ScriptPubkey, Txid, XpubDerivable};
 use bpwallet::Wallet;
-use rgb::containers::{FileContent, Kit, Transfer};
+use rgb::containers::{ConsignmentExt, FileContent, Kit, Transfer};
 use rgb::contract::FilterIncludeAll;
 use rgb::invoice::{Beneficiary, Pay2Vout, RgbInvoiceBuilder, XChainNet};
+use nonasync::persistence::CloneNoPersistence;
 use rgb::persistence::{MemIndex, MemStash, MemState, StashReadProvider, StateReadProvider, Stock};
 use rgb::stl::AssetSpec;
 use rgb::validation::{
@@ -322,14 +323,30 @@ pub fn decode_psbt(
     let mut outputs = Vec::new();
     let mut total_out: u64 = 0;
     let mut out_ours: u64 = 0;
-    for out in psbt.outputs() {
+    for (vout, out) in psbt.outputs().enumerate() {
         let val = out.amount.sats();
-        let ours = owned_spks.iter().any(|(s, _, _)| *s == out.script);
+        // Match by the output scriptPubkey → the address's derivation, mirroring the
+        // input loop. The keychain is what lets the worker detect an RGB swap
+        // wallet-derived (a k10 receive output = the wallet getting RGB), so the
+        // pre-sign consignment gate can't be bypassed by a dApp omitting it. `vout` is
+        // the output's index in THIS tx — with `txid` it forms the witness-vout seal
+        // (`<txid>:<vout>`) the worker passes to `consignment_delivery_to_me`. (`index`
+        // is the ADDRESS derivation index, a different number — don't conflate them.)
+        let deriv = owned_spks
+            .iter()
+            .find(|(s, _, _)| *s == out.script)
+            .map(|(_, kc, idx)| (*kc, *idx));
+        let ours = deriv.is_some();
         total_out = total_out.saturating_add(val);
         if ours {
             out_ours = out_ours.saturating_add(val);
         }
-        outputs.push(serde_json::json!({ "valueSats": val, "ours": ours }));
+        let mut entry = serde_json::json!({ "valueSats": val, "ours": ours, "vout": vout });
+        if let Some((kc, idx)) = deriv {
+            entry["keychain"] = serde_json::json!(kc);
+            entry["index"] = serde_json::json!(idx);
+        }
+        outputs.push(entry);
     }
 
     let fee = total_in.saturating_sub(total_out);
@@ -476,46 +493,10 @@ impl RgbStock {
         let cn = chain_net(network)?;
         let ords = parse_ords(ords_json)?;
 
-        // Resolver: the consignment carries the txes; the caller supplies the ord.
-        let mut statuses: HashMap<Txid, WitnessStatus> = HashMap::new();
-        for bw in transfer.bundles.iter() {
-            if let Some(tx) = bw.pub_witness.tx() {
-                let txid = tx.txid();
-                let ord = ords.get(&txid).cloned().unwrap_or(WitnessOrd::Tentative);
-                statuses.insert(txid, WitnessStatus::Resolved(tx.clone(), ord));
-            }
-        }
-        let resolver = JsResolver { statuses, chain_net: cn };
+        // Validate + absorb into the LIVE stock (shared validate/accept core, also used
+        // by the non-mutating delivered-value read in `consignment_delivery_to_me`).
+        Self::validate_and_accept(&mut self.stock, transfer, &ords, cn)?;
 
-        // NIA schema (idempotent) so a fresh stock can validate NIA consignments.
-        let kit = Kit::load(&mut &NIA_SCHEMA_KIT[..])
-            .map_err(|e| JsError::new(&format!("load NIA kit: {e}")))?
-            .validate()
-            .map_err(|e| JsError::new(&format!("validate NIA kit: {e:?}")))?;
-        self.stock
-            .import_kit(kit)
-            .map_err(|e| JsError::new(&format!("import NIA kit: {e}")))?;
-
-        let config = ValidationConfig {
-            chain_net: cn,
-            trusted_typesystem: self
-                .stock
-                .as_stash_provider()
-                .type_system()
-                .map_err(|e| JsError::new(&format!("type system: {e}")))?
-                .clone(),
-            ..Default::default()
-        };
-
-        let validated = transfer
-            .validate(&resolver, &config)
-            .map_err(|e| JsError::new(&format!("consignment validation: {e:?}")))?;
-        if validated.validation_status().validity() != Validity::Valid {
-            return Err(JsError::new(&format!("consignment invalid: {}", validated.validation_status())));
-        }
-        self.stock
-            .accept_transfer(validated, &resolver)
-            .map_err(|e| JsError::new(&format!("accept_transfer: {e}")))?;
         // Re-derive state across ALL of the stock's witnesses, not just this
         // consignment's. `update_witnesses` walks every known witness, so a resolver
         // scoped to one consignment would report every OTHER asset's witness as
@@ -527,6 +508,83 @@ impl RgbStock {
             .update_witnesses(resolver, 0, vec![])
             .map_err(|e| JsError::new(&format!("update_witnesses: {e}")))?;
         Ok(())
+    }
+
+    /// Validate a maker-returned swap consignment WITHOUT mutating the live stock, and
+    /// report the RGB it delivers to the wallet's OWN seals. This is the RGB-side
+    /// equivalent of `decode_psbt`'s BTC delta: the trustless number the confirmation
+    /// screen shows, and the #38 delivered-value gate — a consignment delivering to a
+    /// seal we don't own (or short) surfaces as a smaller/zero amount, so a malicious
+    /// maker can't have us release BTC for RGB that doesn't land on us.
+    ///
+    /// Runs on a `clone_no_persistence` scratch copy so the real stash is untouched
+    /// pre-settlement (gap A2: validate-without-absorb). Note the split of concerns:
+    /// MINED-ANCESTRY is checked separately (`verifyMinedAncestry` over the SPV path);
+    /// the delivered AMOUNT is a structural property of the transition, independent of
+    /// whether the swap tx is mined yet — so we feed every consignment witness as Mined
+    /// purely so `fungible()` surfaces the not-yet-broadcast delivery allocation. The two
+    /// gates compose: graph-valid (here) + mined ancestry (there) + delivered-to-us (here).
+    ///
+    /// `my_seals_json` = the outpoints the wallet expects to receive on, `["txid:vout", …]`
+    /// — for a witness-vout receive/change that's `"<swap_txid>:<our_k10_vout>"`, sourced
+    /// wallet-side from `decode_psbt` (the k10-tagged output on the swap tx). Returns
+    /// `{ contractId, ticker, precision, amount }` with `amount` summed over our seals.
+    pub fn consignment_delivery_to_me(
+        &self,
+        consignment: &[u8],
+        network: &str,
+        my_seals_json: &str,
+    ) -> Result<String, JsError> {
+        let transfer = Transfer::load(consignment).map_err(|e| JsError::new(&format!("load consignment: {e}")))?;
+        let cn = chain_net(network)?;
+        let my_seals: HashSet<String> = serde_json::from_str(my_seals_json)
+            .map_err(|e| JsError::new(&format!("parse seals: {e}")))?;
+
+        // Surface the delivery allocation regardless of mining: mark every witness Mined
+        // at a placeholder position (height/time must be plausible or `WitnessPos::bitcoin`
+        // rejects them). Soundness rests on mining being enforced elsewhere (the SPV gate)
+        // — here we only ask "what does this transition assign to my seals".
+        let pos = WitnessPos::bitcoin(NonZeroU32::new(100).unwrap(), 1_700_000_000)
+            .ok_or_else(|| JsError::new("bad witness pos"))?;
+        let mut ords: HashMap<Txid, WitnessOrd> = HashMap::new();
+        for bw in transfer.bundles.iter() {
+            if let Some(tx) = bw.pub_witness.tx() {
+                ords.insert(tx.txid(), WitnessOrd::Mined(pos));
+            }
+        }
+
+        let cid = transfer.contract_id();
+        // Scratch stock: validate + accept here so the live stash is never mutated.
+        let mut scratch = self.stock.clone_no_persistence();
+        Self::validate_and_accept(&mut scratch, transfer, &ords, cn)?;
+
+        let contract = scratch
+            .contract_data(cid)
+            .map_err(|e| JsError::new(&format!("contract_data: {e}")))?;
+        let (ticker, precision) = match contract.global("spec").next() {
+            Some(v) => {
+                let spec = AssetSpec::from_strict_val_unchecked(&v);
+                (spec.ticker().to_owned(), spec.precision.decimals())
+            }
+            None => (cid.to_string(), 0u8),
+        };
+        let mut amount: u64 = 0;
+        for details in contract.schema.owned_types.values() {
+            if let Ok(allocs) = contract.fungible(details.name.clone(), &FilterIncludeAll) {
+                for alloc in allocs {
+                    if my_seals.contains(&alloc.seal.to_outpoint().to_string()) {
+                        amount = amount.saturating_add(alloc.state.value());
+                    }
+                }
+            }
+        }
+        Ok(serde_json::json!({
+            "contractId": cid.to_string(),
+            "ticker": ticker,
+            "precision": precision,
+            "amount": amount,
+        })
+        .to_string())
     }
 
     /// Re-derive contract state from fresh witness ords WITHOUT re-accepting a
@@ -663,6 +721,59 @@ impl RgbStock {
 
 // Non-exported helpers + the per-asset aggregation.
 impl RgbStock {
+
+    /// Validate a consignment against a JS-fed resolver (txes from the consignment,
+    /// ords from the caller) and accept it into `stock`. The shared validate/accept
+    /// core behind both `accept_consignment` (live stock) and `consignment_delivery_to_me`
+    /// (a throwaway `clone_no_persistence` scratch). Does NOT `update_witnesses` or
+    /// `save` — the caller decides. Rejects a graph/schema/commitment-invalid consignment.
+    fn validate_and_accept(
+        stock: &mut WalletStock,
+        transfer: Transfer,
+        ords: &HashMap<Txid, WitnessOrd>,
+        cn: ChainNet,
+    ) -> Result<(), JsError> {
+        // Resolver: the consignment carries the txes; the caller supplies the ord.
+        let mut statuses: HashMap<Txid, WitnessStatus> = HashMap::new();
+        for bw in transfer.bundles.iter() {
+            if let Some(tx) = bw.pub_witness.tx() {
+                let txid = tx.txid();
+                let ord = ords.get(&txid).cloned().unwrap_or(WitnessOrd::Tentative);
+                statuses.insert(txid, WitnessStatus::Resolved(tx.clone(), ord));
+            }
+        }
+        let resolver = JsResolver { statuses, chain_net: cn };
+
+        // NIA schema (idempotent) so a fresh stock can validate NIA consignments.
+        let kit = Kit::load(&mut &NIA_SCHEMA_KIT[..])
+            .map_err(|e| JsError::new(&format!("load NIA kit: {e}")))?
+            .validate()
+            .map_err(|e| JsError::new(&format!("validate NIA kit: {e:?}")))?;
+        stock
+            .import_kit(kit)
+            .map_err(|e| JsError::new(&format!("import NIA kit: {e}")))?;
+
+        let config = ValidationConfig {
+            chain_net: cn,
+            trusted_typesystem: stock
+                .as_stash_provider()
+                .type_system()
+                .map_err(|e| JsError::new(&format!("type system: {e}")))?
+                .clone(),
+            ..Default::default()
+        };
+
+        let validated = transfer
+            .validate(&resolver, &config)
+            .map_err(|e| JsError::new(&format!("consignment validation: {e:?}")))?;
+        if validated.validation_status().validity() != Validity::Valid {
+            return Err(JsError::new(&format!("consignment invalid: {}", validated.validation_status())));
+        }
+        stock
+            .accept_transfer(validated, &resolver)
+            .map_err(|e| JsError::new(&format!("accept_transfer: {e}")))?;
+        Ok(())
+    }
 
     /// A [`ResolveWitness`] covering EVERY witness the stock currently knows: each is
     /// seeded with its current stored ord and its tx (from the stash), then `overlay`

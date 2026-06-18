@@ -16,6 +16,7 @@ serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 # The RGB engine, no native features (no electrum/fs) — storage/indexer live in JS.
 rgb-api = { version = "=0.11.1-rc.6", default-features = false, features = ["serde"] }
+nonasync = "=0.1.3"
 # Strict (de)serialization of the in-memory Stock providers → bytes for IndexedDB.
 strict_encoding = "=2.8.2"
 # Confined<Vec<u8>> for the (de)serialize byte conversions.

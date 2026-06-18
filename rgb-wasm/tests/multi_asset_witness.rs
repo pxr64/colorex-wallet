@@ -188,3 +188,54 @@ fn second_accept_preserves_first_and_revert_is_isolated() {
         .expect("re-mine A witness");
     assert_eq!(owned_balance(&stock, &a_txids, &a_cid), a_balance, "A returns once its witness is mined again");
 }
+
+/// `consignment_delivery_to_me` reads the RGB a maker consignment delivers to the
+/// wallet's OWN seals WITHOUT mutating the live stock (gap A2: validate-without-absorb),
+/// and yields 0 for a seal we don't own — the structural half of the #38 delivered-value
+/// gate (a maker can't make us see inflow that isn't actually ours).
+#[test]
+fn delivery_to_my_seals_reads_amount_and_rejects_wrong_seal() {
+    let a = match read_b64("asset_a.consignment") {
+        Some(a) => a,
+        None => {
+            eprintln!("SKIP delivery_to_my_seals_reads_amount_and_rejects_wrong_seal: fixtures absent");
+            return;
+        }
+    };
+    let net = network();
+    let stock = RgbStock::new().expect("new stock");
+    let a_txids = witness_ids(&stock, &a);
+
+    // The consignment delivers to witness-vout seals on its witness tx(s): "<txid>:<vout>",
+    // the same outpoint set `owned_balance` reads. This is what the wallet sources from
+    // `decode_psbt` (its k10-tagged output on the swap tx) in production.
+    let my_seals: Vec<String> = a_txids
+        .iter()
+        .flat_map(|t| (0..6u32).map(move |v| format!("{t}:{v}")))
+        .collect();
+    let res = stock
+        .consignment_delivery_to_me(&a, &net, &serde_json::to_string(&my_seals).unwrap())
+        .expect("delivery read");
+    let v: Value = serde_json::from_str(&res).unwrap();
+    let amount = v["amount"].as_u64().expect("amount");
+    assert!(amount > 0, "delivers a positive amount to our witness-vout seal");
+
+    // Cross-check amount + contract against the live-accept balance path (same number,
+    // derived without absorbing).
+    let mut s2 = RgbStock::new().expect("new stock");
+    s2.accept_consignment(&a, &tentative_ords(&a_txids), &net).expect("accept A");
+    let a_cid = assets(&s2).into_iter().next().unwrap().0;
+    assert_eq!(v["contractId"].as_str().unwrap(), a_cid, "same contract id");
+    assert_eq!(amount, owned_balance(&s2, &a_txids, &a_cid), "delivered == accept-path balance");
+
+    // Wrong seal → 0: RGB delivered to a seal we don't own contributes nothing.
+    let bogus = serde_json::to_string(&[format!("{}:0", "00".repeat(32))]).unwrap();
+    let res0 = stock
+        .consignment_delivery_to_me(&a, &net, &bogus)
+        .expect("delivery read (wrong seal)");
+    let v0: Value = serde_json::from_str(&res0).unwrap();
+    assert_eq!(v0["amount"].as_u64().unwrap(), 0, "RGB to a seal we don't own contributes 0");
+
+    // Validate-without-absorb (A2): neither read mutated the LIVE stock.
+    assert_eq!(stock.list_assets().expect("list_assets"), "[]", "scratch reads leave the live stock empty");
+}

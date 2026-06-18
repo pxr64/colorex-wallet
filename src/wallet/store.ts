@@ -728,6 +728,23 @@ export async function consignmentWitnessIds(consignmentB64: string): Promise<str
   return JSON.parse(s.consignment_witness_ids(b64ToBytes(consignmentB64))) as string[]
 }
 
+/** The RGB a maker consignment delivers to the wallet's OWN seals — the trustless
+ *  RGB-side delta for the confirmation screen and the #38 delivered-value gate. Runs on
+ *  a throwaway scratch stock (the live stash is never mutated, gap A2); RGB delivered to
+ *  a seal we don't own contributes 0. `mySeals` = the outpoints we expect to receive on
+ *  ("txid:vout"), sourced wallet-side from `decodePsbt` (our k10-tagged swap-tx output).
+ *  Mining is enforced separately (the SPV gate); this is the structural delivered amount. */
+export async function consignmentDeliveryToMe(
+  consignmentB64: string,
+  mySeals: string[],
+  network = 'signet',
+): Promise<{ contractId: string; ticker: string; precision: number; amount: number }> {
+  const s = await openStock()
+  return JSON.parse(
+    s.consignment_delivery_to_me(b64ToBytes(consignmentB64), network, JSON.stringify(mySeals)),
+  )
+}
+
 /** Accept a consignment into the stock with caller-supplied witness ords, then
  *  persist. Idempotent: re-accepting an already-accepted consignment with fresh
  *  (now-mined) ords promotes the allocation's WitnessOrd Tentative→Mined — the
