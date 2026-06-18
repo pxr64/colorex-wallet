@@ -18,11 +18,9 @@ export interface Asset {
   utxos: number
 }
 
-/** Format a raw integer balance with `precision` decimals for display. */
-export function formatUnits(raw: number, precision: number): string {
-  const v = precision > 0 ? raw / Math.pow(10, precision) : raw
-  return v.toLocaleString('en-US', { maximumFractionDigits: precision })
-}
+// Re-exported from the pure `units` module so existing importers (worker, UI) keep
+// `import { formatUnits } from '../wallet/store'` while test-pure modules import it directly.
+export { formatUnits } from './units'
 
 const DB_NAME = 'colorex-wallet'
 const DB_VERSION = 2

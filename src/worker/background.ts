@@ -9,6 +9,7 @@
 // marked TODO. The request registry, window opener, and message routing are real.
 
 import { assembleSignRequest } from '../colorex/sign-request'
+import { deriveSwapRgb } from '../colorex/swap-rgb'
 import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
 import {
@@ -18,7 +19,6 @@ import {
   createInvoice,
   createTransfer,
   decodePsbt,
-  formatUnits,
   lock,
   rgbAtOutpoints,
   signingKey,
@@ -291,98 +291,35 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
   }
   const network = sdk.getNetwork()
 
-  // DECODE the dApp-provided PSBT (trustless BTC side). Direction is INFERRED from the
-  // wallet's own BTC delta, never trusted from the dApp: a buy spends BTC for RGB
-  // (delta < 0); a sell receives BTC for RGB (delta >= 0).
+  // DECODE the dApp-provided PSBT (trustless BTC side).
   const decoded = await decodePsbt(intent.psbt, network)
-  const side: 'buy' | 'sell' = decoded.btcDeltaSats < 0 ? 'buy' : 'sell'
 
-  // RGB display hints. These start dApp-claimed (display only) but are OVERRIDDEN with
-  // wallet-derived figures below for both legs: a BUY from the consignment's delivery to
-  // our seals; a SELL from the RGB at the anchors we spend (net of any change). Nothing
-  // dApp-claimed should reach the confirmation's RGB row for a real swap.
-  let assetTicker = intent.assetId?.slice(0, 10) ?? 'RGB'
-  let assetPrecision = 0
-  let contractId = intent.assetId ?? ''
-  let rgbAmountRaw = intent.amount ?? 0
-  let warning: string | undefined
+  // RGB display hints START dApp-claimed (display only). `deriveSwapRgb` OVERRIDES them with
+  // wallet-derived figures for a real swap (#38 delivered-value gate) — buy: the consignment's
+  // delivery to our seals; sell: the RGB at the anchors we spend, net of change — or throws to
+  // refuse a buy that delivers nothing verifiable to us. The chain/stock reads are passed in.
+  const base = {
+    assetTicker: intent.assetId?.slice(0, 10) ?? 'RGB',
+    assetPrecision: 0,
+    contractId: intent.assetId ?? '',
+    rgbAmountRaw: intent.amount ?? 0,
+  }
   if (intent.assetId) {
     try {
       const bal = await sdk.getAssetBalance(intent.assetId)
-      assetTicker = bal.ticker
-      assetPrecision = bal.precision
+      base.assetTicker = bal.ticker
+      base.assetPrecision = bal.precision
     } catch {
       /* unknown asset — fall back to the contract id prefix */
     }
   }
-
-  // BUY-SWAP detection is WALLET-DERIVED: an owned k10 (RGB) output on the swap tx means
-  // the wallet is receiving RGB. That — not "BTC flows out" alone — is what distinguishes
-  // a buy-swap from a plain BTC send (also btcDelta < 0, but with no k10 output), so plain
-  // sends pass through untouched. The seals we expect to receive on are those k10 outputs:
-  // `<swap_txid>:<vout>` (sourced from decode, never the dApp; a tapret host is hideable
-  // from the PSBT but our own address derivation is not).
-  const rgbReceiveSeals = decoded.outputs
-    .filter((o) => o.ours && o.keychain === 10)
-    .map((o) => `${decoded.txid}:${o.vout}`)
-  if (side === 'buy' && rgbReceiveSeals.length > 0) {
-    // The RGB the user sees MUST be wallet-derived from the maker's consignment (its
-    // delivery to OUR seals), not the dApp's claim. A buy delivering no verifiable RGB to
-    // us (no consignment, or it pays a seal we don't own → amount 0) is refused outright:
-    // signing would release BTC for RGB the wallet can't see arriving. Closes the A1
-    // fail-open by construction — a dApp omitting the consignment can't get a buy signed.
-    // (Blinded receives have no k10 output to key on; that issued-invoice fallback is a
-    // later increment. Witness-vout receives — our common path — are covered here.)
-    const delivery = intent.consignment
-      ? await consignmentDeliveryToMe(intent.consignment, rgbReceiveSeals, network)
-      : null
-    if (!delivery || delivery.amount === 0) {
-      throw new Error(
-        'refusing to sign a buy: the maker consignment delivers no verifiable RGB to your wallet ' +
-          '(missing consignment, or it pays a seal you do not own)',
-      )
-    }
-    assetTicker = delivery.ticker
-    assetPrecision = delivery.precision
-    contractId = delivery.contractId
-    rgbAmountRaw = delivery.amount
-  }
-
-  // SELL-SWAP detection is WALLET-DERIVED too: spending our own k10 (RGB) anchors. The RGB
-  // at those anchors is what's AT RISK; we value it from our own stash (`rgbAtOutpoints`),
-  // never the dApp's claim. The maker's consignment holds BOTH legs of the swap transition —
-  // the sold output (→ maker) and the change (→ our seal) — so reading its delivery to OUR
-  // seals yields the change coming back, and the net we part with is `gross − change`.
-  const spentAnchors = decoded.inputs.filter((i) => i.ours && i.keychain === 10).map((i) => i.outpoint)
-  if (side === 'sell' && spentAnchors.length > 0) {
-    const atRisk = await rgbAtOutpoints(spentAnchors)
-    // Single-asset sell (the only flow today); sum defensively in case of multiple.
-    const grossSpent = atRisk.reduce((n, a) => n + a.balance, 0)
-    const a0 = atRisk[0]
-    if (a0) {
-      assetTicker = a0.ticker
-      assetPrecision = a0.precision
-      contractId = a0.contractId
-    }
-    if (intent.consignment) {
-      // Change returns to our k10 output on the swap tx (witness-vout), the same shape as a
-      // buy receive. Net parted-with = gross spent − change back to us.
-      const changeSeals = decoded.outputs
-        .filter((o) => o.ours && o.keychain === 10)
-        .map((o) => `${decoded.txid}:${o.vout}`)
-      const change = changeSeals.length > 0 ? await consignmentDeliveryToMe(intent.consignment, changeSeals, network) : null
-      rgbAmountRaw = Math.max(0, grossSpent - (change?.amount ?? 0))
-    } else {
-      // No consignment to verify the swap, yet we're spending RGB anchors: we cannot confirm
-      // ANY of it comes back. Surface the full amount at risk and warn loudly — the user is
-      // the final approver, but must not sign this blind (gap A3: dApp must forward it).
-      rgbAmountRaw = grossSpent
-      warning =
-        `This swap spends RGB anchors holding ${formatUnits(grossSpent, assetPrecision)} ${assetTicker}, but no ` +
-        `consignment was provided to verify what you receive in return. The wallet cannot confirm any of it ` +
-        `comes back — signing risks draining the full amount. Only proceed if you trust this site and expect this exact sale.`
-    }
-  }
+  const { side, assetTicker, assetPrecision, contractId, rgbAmountRaw, warning } = await deriveSwapRgb(
+    decoded,
+    intent,
+    network,
+    base,
+    { delivery: consignmentDeliveryToMe, anchors: rgbAtOutpoints },
+  )
 
   const { connected = [] } = await chrome.storage.local.get('connected')
   return assembleSignRequest({
