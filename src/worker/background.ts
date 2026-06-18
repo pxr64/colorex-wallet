@@ -9,7 +9,7 @@
 // marked TODO. The request registry, window opener, and message routing are real.
 
 import { assembleSignRequest } from '../colorex/sign-request'
-import { deriveSwapRgb } from '../colorex/swap-rgb'
+import { deriveRgbDelta } from '../colorex/rgb-delta'
 import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
 import {
@@ -294,15 +294,14 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
   // DECODE the dApp-provided PSBT (trustless BTC side).
   const decoded = await decodePsbt(intent.psbt, network)
 
-  // RGB display hints START dApp-claimed (display only). `deriveSwapRgb` OVERRIDES them with
-  // wallet-derived figures for a real swap (#38 delivered-value gate) — buy: the consignment's
-  // delivery to our seals; sell: the RGB at the anchors we spend, net of change — or throws to
-  // refuse a buy that delivers nothing verifiable to us. The chain/stock reads are passed in.
+  // RGB asset labels start as dApp hints (display only); `deriveRgbDelta` computes the actual
+  // wallet-derived RGB MOVEMENT (signed rgbDelta = delivery-to-our-seals − anchors-we-spend)
+  // and any risk warning, from value flows alone — no buy/sell, nothing dApp-claimed in the
+  // amount. The chain/stock reads are injected.
   const base = {
     assetTicker: intent.assetId?.slice(0, 10) ?? 'RGB',
     assetPrecision: 0,
     contractId: intent.assetId ?? '',
-    rgbAmountRaw: intent.amount ?? 0,
   }
   if (intent.assetId) {
     try {
@@ -313,7 +312,7 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
       /* unknown asset — fall back to the contract id prefix */
     }
   }
-  const { side, assetTicker, assetPrecision, contractId, rgbAmountRaw, warning } = await deriveSwapRgb(
+  const { assetTicker, assetPrecision, contractId, rgbDeltaRaw, warning } = await deriveRgbDelta(
     decoded,
     intent,
     network,
@@ -334,11 +333,10 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
     contractId,
     assetTicker,
     assetPrecision,
-    rgbAmountRaw,
+    rgbDeltaRaw,
     // The maker's consignment, if the dApp forwarded it — drives the SPV pre-sign gate.
     consignment: intent.consignment,
     warning,
-    side,
   })
 }
 

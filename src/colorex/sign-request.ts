@@ -35,8 +35,8 @@ export interface AssembleParams {
   contractId: string
   assetTicker: string
   assetPrecision: number
-  rgbAmountRaw: number // quote amount in raw units (precision applied for display)
-  side: 'buy' | 'sell'
+  /** Signed wallet-derived RGB movement, raw units: + received, − spent (from deriveRgbDelta). */
+  rgbDeltaRaw: number
   /** The maker's RGB consignment (base64), if the dApp forwarded it. Drives the SPV
    *  pre-sign mined-ancestry gate in the worker. */
   consignment?: string
@@ -57,8 +57,8 @@ function estimateRateSatVb(d: DecodedPsbt): number {
 const sats = (n: number) => `${n.toLocaleString('en-US')} sats`
 
 export function assembleSignRequest(p: AssembleParams): SignRequest {
-  const sign = p.side === 'buy' ? 1 : -1
-  const rgbDisplay = (sign * p.rgbAmountRaw) / 10 ** p.assetPrecision
+  // Wallet-derived, already SIGNED (+ received, − spent) — no trade-type needed.
+  const rgbDisplay = p.rgbDeltaRaw / 10 ** p.assetPrecision
 
   // The simulated outcome — the wallet's net position change.
   const deltas: BalanceDelta[] = [
