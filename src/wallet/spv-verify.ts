@@ -16,6 +16,7 @@
 import { type Checkpoint, bakedCheckpoints, nearestCheckpoint } from './checkpoints'
 import { reconcileCheckpoints } from './checkpoint-reconcile'
 import { loadLocalCheckpoints, saveLocalCheckpoints } from './checkpoint-store'
+import { BURY_DEPTH, loadVerifiedCache, partitionByCache, recordVerified } from './verified-witness-cache'
 import { rgbReady, wasm } from './rgb'
 import { ESPLORA_SIGNET, blockHashAtHeight, fetchHeaderRun, tipHeight, txMerkleProof } from './esplora'
 
@@ -66,10 +67,11 @@ interface Segment {
  * the nearest baked checkpoint and validating the bounded header run from it. Returns the
  * verdict; the caller refuses to sign on `all_mined === false`.
  *
- * Per witness: one merkle-proof fetch + the bounded header run from its nearest checkpoint
- * (≤ one epoch). The verified-witness cache (skip already-buried txids) + batched header fetch
- * are planned follow-ups (gaps B1/B3). Throws if a witness sits below all baked checkpoints —
- * the table must be extended downward to cover the earliest contract genesis (gap C1).
+ * Per (uncached) witness: one merkle-proof fetch + the bounded header run from its nearest
+ * checkpoint (≤ one epoch). Already-verified, deeply-buried witnesses are skipped via the
+ * verified-witness cache. Batched header fetch is a planned optimization (gap B1). Throws if a
+ * witness sits below all baked checkpoints — the table must be extended downward to cover the
+ * earliest contract genesis (gap C1).
  */
 export async function verifyMinedAncestry(
   witnessTxids: string[],
@@ -89,11 +91,19 @@ export async function verifyMinedAncestry(
   if (keptLocal.length !== local.length) await saveLocalCheckpoints(network, keptLocal)
   const tip = await tipHeight(base)
 
-  // 1. Per witness: merkle proof + block hash + the checkpoint that anchors its run.
+  // Verified-witness cache: skip witnesses already verified + now ≥ BURY_DEPTH deep (reorg-safe).
+  // Skipped ones are exempted from the wasm check; we re-verify the rest. Repeat trades on the
+  // same asset thus cost ~O(new witnesses) rather than re-walking the whole ancestry.
+  const cache = await loadVerifiedCache(network)
+  const { skip } = partitionByCache(witnessTxids, cache, tip, BURY_DEPTH)
+  const effectiveExempt = [...exempt, ...skip]
+
+  // 1. Per witness (not exempt/cached): merkle proof + block hash + the checkpoint that anchors it.
   const anchors: Record<string, WitnessInclusion> = {}
   const groups = new Map<number, { cp: Checkpoint; maxHeight: number }>()
+  const checkedHeights: Record<string, number> = {} // verified this run → cache on success
   for (const txid of witnessTxids) {
-    if (exempt.includes(txid)) continue
+    if (effectiveExempt.includes(txid)) continue
     const proof = await txMerkleProof(txid, base)
     const cp = nearestCheckpoint(checkpoints, proof.block_height)
     if (!cp) {
@@ -108,6 +118,7 @@ export async function verifyMinedAncestry(
       tx_index: proof.pos,
       merkle_proof: proof.merkle,
     }
+    checkedHeights[txid] = proof.block_height
     const g = groups.get(cp.height)
     groups.set(cp.height, { cp, maxHeight: Math.max(proof.block_height, g?.maxHeight ?? 0) })
   }
@@ -125,14 +136,18 @@ export async function verifyMinedAncestry(
   const pack = { version: 1, network, anchors, headers: {} }
   const out = wasm.verify_consignment_spv_segments(
     JSON.stringify(witnessTxids),
-    JSON.stringify(exempt),
+    JSON.stringify(effectiveExempt),
     JSON.stringify(pack),
     JSON.stringify(segments),
     tip,
     network,
     minConfs,
   )
-  return JSON.parse(out) as SpvVerdict
+  const verdict = JSON.parse(out) as SpvVerdict
+  // Cache the witnesses we just verified mined (only those deep enough to be reorg-safe are
+  // later skipped — see partitionByCache). Only on a clean verdict.
+  if (verdict.all_mined) await recordVerified(network, checkedHeights)
+  return verdict
 }
 
 /** Human-readable summary of why a verdict failed (for logs / the sign screen). */
