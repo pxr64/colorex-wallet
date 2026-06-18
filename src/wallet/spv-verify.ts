@@ -14,6 +14,8 @@
 // consignment is supplied, graph-validation, dApp delivery) tracked in docs/spv-verification-gaps.md.
 
 import { type Checkpoint, bakedCheckpoints, nearestCheckpoint } from './checkpoints'
+import { reconcileCheckpoints } from './checkpoint-reconcile'
+import { loadLocalCheckpoints, saveLocalCheckpoints } from './checkpoint-store'
 import { rgbReady, wasm } from './rgb'
 import { ESPLORA_SIGNET, blockHashAtHeight, fetchHeaderRun, tipHeight, txMerkleProof } from './esplora'
 
@@ -78,7 +80,13 @@ export async function verifyMinedAncestry(
   const base = opts.base ?? ESPLORA_SIGNET
   const exempt = opts.exempt ?? []
   const minConfs = opts.minConfs ?? wasm.spv_recommended_confs(network)
-  const checkpoints = bakedCheckpoints(network)
+  // Trust floor = baked table; extend with the background-validated local checkpoints, with
+  // baked authoritative. Reconcile drops conflicting/redundant local entries — persist the
+  // cleaned set so a poisoned/stale store self-heals on use.
+  const baked = bakedCheckpoints(network)
+  const local = await loadLocalCheckpoints(network)
+  const { effective: checkpoints, keptLocal } = reconcileCheckpoints(baked, local)
+  if (keptLocal.length !== local.length) await saveLocalCheckpoints(network, keptLocal)
   const tip = await tipHeight(base)
 
   // 1. Per witness: merkle proof + block hash + the checkpoint that anchors its run.
