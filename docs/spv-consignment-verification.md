@@ -75,11 +75,27 @@ dependency of the wallet (the vendored verifier stays tiny: `sha2` + `serde`).
 ## Scaling: dense checkpoints + bounded runs
 
 Rather than syncing the whole header chain, the wallet bakes **one checkpoint per difficulty epoch**
-(every 2016 blocks; ~440 hashes ≈ 14 KB cover all of Bitcoin history). To verify a witness at
-height `W`, it fetches only the short run from the **nearest checkpoint at/below `W`** up to `W` —
-**≤ 2016 headers**, regardless of chain height or how long the wallet was offline. Per-witness runs
-are validated independently and merged (`from_segments`). A verified-witness cache (planned) drops
-repeat-trade cost to ~O(new witnesses).
+(every 2016 blocks). RGB only dates to ~2023, so RGB-era→now is **dozens** of hashes per network,
+not 440-from-genesis. To verify a witness at height `W`, the wallet fetches only the short run from
+the **nearest checkpoint at/below `W`** up to `W` — **≤ 2016 headers**, regardless of chain height
+or how long the wallet was offline. Per-witness runs are validated independently and merged
+(`from_segments`). A verified-witness cache drops repeat-trade cost to ~O(new witnesses).
+
+**Baked floor + background extension.** Checkpoints are baked into the binary (the auditable trust
+root). A background task *extends* the table forward — validating headers from the highest trusted
+checkpoint to the tip and appending new epoch checkpoints to a small local store (a few hashes, not
+the header chain) — so the nearest checkpoint stays ≤ 2016 below even recently-mined witnesses. The
+local extension is **disposable** and **never overrides baked**; on startup the wallet reconciles
+(baked wins all conflicts, redundant local is pruned, doubtful local is dropped + re-derived), which
+also transparently handles a new binary shipping an extended baked table. Correctness never depends
+on the local store — if it's empty, verification still works with a longer run from the last baked
+checkpoint.
+
+**Known gaps (security follow-ups):** (1) the pre-sign gate is currently *fail-open* — it only runs
+when the dApp forwards a consignment; a buy-swap sign must *require* one. (2) The SPV gate proves
+witnesses are *mined*; the consignment's RGB graph (valid transfer to our invoice) must *also* be
+validated pre-sign. (3) The dApp must forward the consignment in the sign intent (it currently
+enqueues it post-broadcast).
 
 ## Where the code is
 

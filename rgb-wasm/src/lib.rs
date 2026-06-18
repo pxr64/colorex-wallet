@@ -183,6 +183,58 @@ pub fn verify_consignment_trusted(
     serde_json::to_string(&verdict).map_err(|e| JsError::new(&e.to_string()))
 }
 
+/// SPV verification over **checkpoint-validated segments** — the dense-checkpoint path used on
+/// both networks (network-gated: signet skips PoW/difficulty, mainnet enforces them). The wallet
+/// picks, per witness, the nearest baked/local checkpoint and fetches the bounded header run from
+/// it; each `(checkpoint, headers)` segment is validated (linkage [+ PoW + difficulty]) and merged.
+///
+/// `segments_json`: `[{ "checkpoint": { "height", "block_hash" }, "headers": ["<80B hex>", …] }]`,
+/// each run contiguous from its checkpoint. `tip_height` is the real chain tip (segments don't
+/// reach it) for confirmation depth. Returns the `SpvVerdict` JSON.
+#[wasm_bindgen]
+pub fn verify_consignment_spv_segments(
+    witness_txids_json: &str,
+    exempt_txids_json: &str,
+    pack_json: &str,
+    segments_json: &str,
+    tip_height: u32,
+    network: &str,
+    min_confs: u32,
+) -> Result<String, JsError> {
+    #[derive(serde::Deserialize)]
+    struct SegIn {
+        checkpoint: spv::Checkpoint,
+        headers: Vec<String>,
+    }
+
+    let witness_txids: Vec<String> = serde_json::from_str(witness_txids_json)
+        .map_err(|e| JsError::new(&format!("witness_txids: {e}")))?;
+    let exempt: HashSet<String> = serde_json::from_str::<Vec<String>>(exempt_txids_json)
+        .map_err(|e| JsError::new(&format!("exempt: {e}")))?
+        .into_iter()
+        .collect();
+    let pack = spv::SpvProofPack::from_json(pack_json.as_bytes()).map_err(|e| JsError::new(&e))?;
+    let net = spv::Network::from_label(network)
+        .ok_or_else(|| JsError::new(&format!("unknown network `{network}`")))?;
+
+    let segs_in: Vec<SegIn> = serde_json::from_str(segments_json)
+        .map_err(|e| JsError::new(&format!("segments: {e}")))?;
+    let mut segments: Vec<(spv::Checkpoint, Vec<Vec<u8>>)> = Vec::with_capacity(segs_in.len());
+    for s in segs_in {
+        let hdrs: Vec<Vec<u8>> = s
+            .headers
+            .iter()
+            .map(|h| spv::merkle::hex_to_bytes(h).ok_or_else(|| JsError::new("segment header not hex")))
+            .collect::<Result<_, _>>()?;
+        segments.push((s.checkpoint, hdrs));
+    }
+
+    let source = spv::CheckpointHeaderSource::from_segments(net, &segments, tip_height)
+        .map_err(|e| JsError::new(&e))?;
+    let verdict = spv::verify_pack(&witness_txids, &exempt, &pack, &source, min_confs);
+    serde_json::to_string(&verdict).map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Recommended confirmation depth K for a network (mainnet 6 / testnet 3 / signet+regtest 1),
 /// so the wallet doesn't hardcode the policy.
 #[wasm_bindgen]

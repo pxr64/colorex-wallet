@@ -112,3 +112,22 @@ export async function tipHeight(base: string = ESPLORA_SIGNET): Promise<number> 
   if (!res.ok) throw new Error(`esplora /blocks/tip/height → ${res.status}`)
   return Number((await res.text()).trim())
 }
+
+/** A contiguous run of raw 80-byte block headers (hex), heights `from..=to` inclusive — the
+ *  input to the checkpoint-validated `CheckpointHeaderSource`. Stage-1 fetches per block
+ *  (`/block-height` → `/block/:hash/header`); a batched `/blocks` + header-reconstruction path is
+ *  the planned optimization (gap B1) to cut the request count ~10×. Runs are bounded by the
+ *  checkpoint spacing (≤ one epoch). */
+export async function fetchHeaderRun(
+  from: number,
+  to: number,
+  base: string = ESPLORA_SIGNET,
+): Promise<string[]> {
+  if (to < from) throw new Error(`fetchHeaderRun: to (${to}) < from (${from})`)
+  const headers: string[] = []
+  for (let h = from; h <= to; h++) {
+    const hash = await blockHashAtHeight(h, base)
+    headers.push(await blockHeader(hash, base))
+  }
+  return headers
+}
