@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check:supply-chain": "node scripts/check-supply-chain.mjs",
+    "check:vendor-sync": "node scripts/check-vendor-sync.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

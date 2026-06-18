@@ -312,7 +312,7 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
       /* unknown asset — fall back to the contract id prefix */
     }
   }
-  const { assetTicker, assetPrecision, contractId, rgbDeltaRaw, warning } = await deriveRgbDelta(
+  const { assetTicker, assetPrecision, contractId, rgbDeltaRaw, findings: rgbFindings } = await deriveRgbDelta(
     decoded,
     intent,
     network,
@@ -343,7 +343,9 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
       })
     }
   }
-  if (warning) findings.push({ severity: 'warn', title: 'RGB couldn’t be fully verified', detail: warning })
+  // RGB value-flow findings (delivered-value / invalid-consignment BLOCKs, spend WARNs) derived
+  // above — merged after the SPV mined-ancestry findings. `finalize` re-enforces any `block`.
+  findings.push(...rgbFindings)
 
   const { connected = [] } = await chrome.storage.local.get('connected')
   return assembleSignRequest({

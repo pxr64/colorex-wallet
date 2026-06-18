@@ -113,17 +113,25 @@ export async function tipHeight(base: string = ESPLORA_SIGNET): Promise<number> 
   return Number((await res.text()).trim())
 }
 
+/** Hard cap on a single header run: one difficulty epoch (2016) + slack for the K-confirmation
+ *  extension. A bounded run is always ≤ one epoch above its checkpoint; a much larger range means a
+ *  witness claimed a height far above its nearest checkpoint (misanchored or forged) — reject it
+ *  rather than fire an unbounded per-block fetch loop. */
+const MAX_HEADER_RUN = 2016 + 64
+
 /** A contiguous run of raw 80-byte block headers (hex), heights `from..=to` inclusive — the
  *  input to the checkpoint-validated `CheckpointHeaderSource`. Stage-1 fetches per block
  *  (`/block-height` → `/block/:hash/header`); a batched `/blocks` + header-reconstruction path is
  *  the planned optimization (gap B1) to cut the request count ~10×. Runs are bounded by the
- *  checkpoint spacing (≤ one epoch). */
+ *  checkpoint spacing (≤ one epoch), enforced by `MAX_HEADER_RUN`. */
 export async function fetchHeaderRun(
   from: number,
   to: number,
   base: string = ESPLORA_SIGNET,
 ): Promise<string[]> {
   if (to < from) throw new Error(`fetchHeaderRun: to (${to}) < from (${from})`)
+  if (to - from + 1 > MAX_HEADER_RUN)
+    throw new Error(`fetchHeaderRun: range ${from}..${to} exceeds cap ${MAX_HEADER_RUN} (misanchored/forged height?)`)
   const headers: string[] = []
   for (let h = from; h <= to; h++) {
     const hash = await blockHashAtHeight(h, base)

@@ -16,6 +16,7 @@
 // A plain BTC send (no owned k10 in/out) moves no RGB → rgbDelta 0, no warning.
 
 import type { DecodedPsbt } from './sign-request'
+import type { SignFinding } from '../types/sign-request'
 import { formatUnits } from '../wallet/units'
 
 /** A consignment's delivery to a given set of our seals (from `consignment_delivery_to_me`). */
@@ -51,7 +52,10 @@ export interface RgbDeltaBase {
 export interface RgbDeltaResult extends RgbDeltaBase {
   /** Signed wallet-derived RGB movement, raw units: + net received, − net spent. */
   rgbDeltaRaw: number
-  warning?: string
+  /** Severity-tagged findings (0..n) from the value-flow analysis. A `block` disables Sign — a
+   *  visible buy (paying BTC) with no good delivery to our seals, or a graph-invalid consignment;
+   *  a `warn` is advisory — spending our RGB anchors with no consignment to verify what returns. */
+  findings: SignFinding[]
 }
 
 const k10Receives = (d: DecodedPsbt) =>
@@ -66,7 +70,7 @@ export async function deriveRgbDelta(
   deps: RgbDeltaDeps,
 ): Promise<RgbDeltaResult> {
   let { assetTicker, assetPrecision, contractId } = base
-  let warning: string | undefined
+  const findings: SignFinding[] = []
   let rgbInRaw = 0
   let rgbOutRaw = 0
 
@@ -74,21 +78,45 @@ export async function deriveRgbDelta(
   const spentAnchors = decoded.inputs.filter((i) => i.ours && i.keychain === 10).map((i) => i.outpoint)
   const payingBtc = decoded.btcDeltaSats < 0
 
-  // RGB IN — what the consignment delivers to our own receive seals. Filtering to our seals
-  // means a delivery to a seal we don't own contributes 0.
+  // RGB IN — what the consignment delivers to our own receive seals (a delivery to a seal we don't
+  // own contributes 0). When we PAY BTC against RGB landing on our seals, anything short of a VALID
+  // consignment that actually delivers to us is a BLOCK — we can't see what we're buying otherwise.
   if (receiveSeals.length > 0) {
-    const delivery = intent.consignment ? await deps.delivery(intent.consignment, receiveSeals, network) : null
+    let delivery: Awaited<ReturnType<DeliveryReader>> | null = null
+    let invalidConsignment = false
+    if (intent.consignment) {
+      try {
+        delivery = await deps.delivery(intent.consignment, receiveSeals, network)
+      } catch (e) {
+        // A2: the consignment failed RGB graph validation (commitments/schema/seal-closing). When
+        // we're paying BTC against it, that's a hard block pre-sign (mirror the node's two-pass
+        // gate). Off the buy path (no BTC out) our money isn't at stake pre-sign, so don't block.
+        invalidConsignment = true
+        if (payingBtc) {
+          findings.push({
+            severity: 'block',
+            title: 'RGB consignment is invalid',
+            detail: `The RGB consignment failed validation (${(e as Error).message}). Signing is blocked for your safety.`,
+          })
+        }
+      }
+    }
     if (delivery && delivery.amount > 0) {
       rgbInRaw = delivery.amount
       assetTicker = delivery.ticker
       assetPrecision = delivery.precision
       contractId = delivery.contractId
-    } else if (payingBtc) {
-      // We pay BTC and the tx pays RGB to our seal, but no consignment confirms any arriving:
-      // we may receive nothing. Warn (the user is the final approver).
-      warning =
-        'You are paying BTC, but no consignment confirms any RGB arriving at your wallet — you may ' +
-        'receive nothing in return. Only proceed if you trust this site and expect this exact purchase.'
+    } else if (payingBtc && !invalidConsignment) {
+      // Paying BTC with RGB landing on our seal, but no consignment confirms any arriving (absent,
+      // or it delivers nothing to our seals) → we may receive nothing → BLOCK. The user cannot
+      // override an objective "nothing verifiably comes back". (A1 / the #38 delivered-value gate.)
+      findings.push({
+        severity: 'block',
+        title: 'No RGB delivery to your wallet',
+        detail:
+          'You are paying BTC, but no consignment confirms RGB arriving at your wallet — you may ' +
+          'receive nothing in return. Signing is blocked for your safety.',
+      })
     }
   }
 
@@ -106,16 +134,20 @@ export async function deriveRgbDelta(
         contractId = a0.contractId
       }
       if (!intent.consignment) {
-        // No consignment to verify what comes back, yet we're spending RGB anchors: surface
-        // the full at-risk amount + warn loudly (gap A3: the dApp must forward the consignment
-        // pre-sign). The change, when present, would offset this via the rgbIn read above.
-        warning =
-          `This transaction spends RGB anchors holding ${formatUnits(grossSpent, assetPrecision)} ${assetTicker}, but no ` +
-          `consignment was provided to verify what you receive in return. The wallet cannot confirm any of it comes back ` +
-          `— signing risks draining the full amount. Only proceed if you trust this site and expect this exact transfer.`
+        // No consignment to verify what comes back, yet we're spending RGB anchors. Only the user
+        // knows if this transfer is intended (e.g. a legitimate send), so this is a WARN, not a
+        // block — they stay the final approver. The change, when present, offsets via rgbIn above.
+        findings.push({
+          severity: 'warn',
+          title: 'RGB couldn’t be fully verified',
+          detail:
+            `This transaction spends RGB anchors holding ${formatUnits(grossSpent, assetPrecision)} ${assetTicker}, but no ` +
+            `consignment was provided to verify what you receive in return. The wallet cannot confirm any of it comes back ` +
+            `— signing risks draining the full amount. Only proceed if you trust this site and expect this exact transfer.`,
+        })
       }
     }
   }
 
-  return { assetTicker, assetPrecision, contractId, rgbDeltaRaw: rgbInRaw - rgbOutRaw, warning }
+  return { assetTicker, assetPrecision, contractId, rgbDeltaRaw: rgbInRaw - rgbOutRaw, findings }
 }

@@ -14,6 +14,7 @@ export interface SignAndSendIntent {
   psbt: string // maker's partial PSBT (base64), built by the dApp via the broker
   assetId?: string // RGB asset hint — display label only
   consignment?: string // the maker's RGB consignment, for the pre-sign verification
+  expected_witness_txid?: string // swap-txid hint (advisory) — the wallet derives the exempt witness from the PSBT
 }
 
 /** page → worker (relayed by the content script). The queue kinds

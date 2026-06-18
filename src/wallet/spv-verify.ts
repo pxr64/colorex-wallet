@@ -90,12 +90,16 @@ export async function verifyMinedAncestry(
   const { effective: checkpoints, keptLocal } = reconcileCheckpoints(baked, local)
   if (keptLocal.length !== local.length) await saveLocalCheckpoints(network, keptLocal)
   const tip = await tipHeight(base)
+  // The wallet's VALIDATED checkpoint frontier (highest height in the reconciled baked ∪ local
+  // set) — the trust anchor for burial. NEVER the esplora tip: an untrusted indexer could inflate
+  // that to mark shallow witnesses buried and suppress re-verification.
+  const validatedFrontier = checkpoints.reduce((m, c) => Math.max(m, c.height), -1)
 
-  // Verified-witness cache: skip witnesses already verified + now ≥ BURY_DEPTH deep (reorg-safe).
-  // Skipped ones are exempted from the wasm check; we re-verify the rest. Repeat trades on the
-  // same asset thus cost ~O(new witnesses) rather than re-walking the whole ancestry.
+  // Verified-witness cache: skip witnesses already verified + now ≥ BURY_DEPTH deep (reorg-safe),
+  // measured against the validated frontier (not the indexer tip). Skipped ones are exempted from
+  // the wasm check; we re-verify the rest. Repeat trades thus cost ~O(new witnesses).
   const cache = await loadVerifiedCache(network)
-  const { skip } = partitionByCache(witnessTxids, cache, tip, BURY_DEPTH)
+  const { skip } = partitionByCache(witnessTxids, cache, validatedFrontier, BURY_DEPTH)
   const effectiveExempt = [...exempt, ...skip]
 
   // 1. Per witness (not exempt/cached): merkle proof + block hash + the checkpoint that anchors it.
@@ -105,6 +109,10 @@ export async function verifyMinedAncestry(
   for (const txid of witnessTxids) {
     if (effectiveExempt.includes(txid)) continue
     const proof = await txMerkleProof(txid, base)
+    // A witness can't be mined above the chain tip; a height beyond it is a forged/misreported
+    // proof. Reject (also bounds the header-run fetch, with fetchHeaderRun's cap as backstop).
+    if (proof.block_height > tip)
+      throw new Error(`witness ${txid} claims height ${proof.block_height} above tip ${tip} — forged proof`)
     const cp = nearestCheckpoint(checkpoints, proof.block_height)
     if (!cp) {
       throw new Error(
@@ -123,11 +131,15 @@ export async function verifyMinedAncestry(
     groups.set(cp.height, { cp, maxHeight: Math.max(proof.block_height, g?.maxHeight ?? 0) })
   }
 
-  // 2. One segment per checkpoint: the contiguous run cp.height..maxHeight. Segments are
-  //    disjoint by construction (nearestCheckpoint picks the anchor in each witness's own epoch).
+  // 2. One segment per checkpoint: the run cp.height..(maxHeight + K), extended K=minConfs blocks
+  //    past the highest witness so the run itself proves each witness's confirmation depth — depth
+  //    comes from validated headers, never an external tip. Clamp to the tip (a witness within K of
+  //    the tip legitimately isn't K-deep yet → transient Unmined). Segments are disjoint by
+  //    construction (nearestCheckpoint picks the anchor in each witness's own epoch).
   const segments: Segment[] = []
   for (const { cp, maxHeight } of groups.values()) {
-    const headers = await fetchHeaderRun(cp.height, maxHeight, base)
+    const runTop = Math.min(maxHeight + minConfs, tip)
+    const headers = await fetchHeaderRun(cp.height, runTop, base)
     segments.push({ checkpoint: { height: cp.height, block_hash: cp.blockHash }, headers })
   }
 
@@ -139,14 +151,29 @@ export async function verifyMinedAncestry(
     JSON.stringify(effectiveExempt),
     JSON.stringify(pack),
     JSON.stringify(segments),
-    tip,
     network,
     minConfs,
   )
   const verdict = JSON.parse(out) as SpvVerdict
   // Cache the witnesses we just verified mined (only those deep enough to be reorg-safe are
   // later skipped — see partitionByCache). Only on a clean verdict.
-  if (verdict.all_mined) await recordVerified(network, checkedHeights)
+  if (verdict.all_mined) {
+    await recordVerified(network, checkedHeights)
+    // Advance the local checkpoint frontier from the runs we just validated — an accelerator on
+    // top of the hourly extend task, so a wallet that was offline (or trading on a recent witness)
+    // keeps runs ≤ one epoch and the bury-cache frontier current. Best-effort; never blocks.
+    try {
+      const harvested = JSON.parse(
+        wasm.harvest_epoch_checkpoints_segments(JSON.stringify(segments), network),
+      ) as Array<{ height: number; block_hash: string }>
+      const fresh: Checkpoint[] = harvested
+        .map((c) => ({ height: c.height, blockHash: c.block_hash }))
+        .filter((c) => c.height > validatedFrontier && !baked.some((b) => b.height === c.height))
+      if (fresh.length) await saveLocalCheckpoints(network, [...keptLocal, ...fresh])
+    } catch (e) {
+      console.warn('epoch-checkpoint harvest failed (non-fatal):', e)
+    }
+  }
   return verdict
 }
 

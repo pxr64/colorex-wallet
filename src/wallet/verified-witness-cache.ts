@@ -29,20 +29,22 @@ export async function recordVerified(network: string, heights: Record<string, nu
 
 /**
  * Partition witnesses into those safe to SKIP (cached *and* now ≥ `buryDepth` confirmations) and
- * those that still need a CHECK. Pure — the testable core of the cache. `tip` is the chain tip;
- * confirmations = `tip - height + 1`.
+ * those that still need a CHECK. Pure — the testable core of the cache. `frontier` is the wallet's
+ * highest VALIDATED checkpoint height — never the untrusted indexer tip, which an attacker could
+ * inflate to mark shallow witnesses buried and suppress their re-verification; confirmations =
+ * `frontier - height + 1`.
  */
 export function partitionByCache(
   txids: string[],
   cache: Record<string, number>,
-  tip: number,
+  frontier: number,
   buryDepth: number,
 ): { skip: string[]; check: string[] } {
   const skip: string[] = []
   const check: string[] = []
   for (const t of txids) {
     const h = cache[t]
-    if (h !== undefined && tip - h + 1 >= buryDepth) skip.push(t)
+    if (h !== undefined && frontier - h + 1 >= buryDepth) skip.push(t)
     else check.push(t)
   }
   return { skip, check }
