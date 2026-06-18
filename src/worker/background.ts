@@ -24,10 +24,10 @@ import {
   signingKey,
 } from '../wallet/store'
 import { signPsbt } from '../wallet/sign'
-import { describeRejections, verifyMinedAncestry } from '../wallet/spv-verify'
+import { describeMinedFailure, verifyMinedAncestry } from '../wallet/spv-verify'
 import { extendLocalCheckpoints } from '../wallet/checkpoint-extend'
 import { drain, enqueue, getQueue, removeItem } from '../wallet/import-queue'
-import type { SignRequest, SignResult } from '../types/sign-request'
+import type { SignFinding, SignRequest, SignResult } from '../types/sign-request'
 import type {
   ConnectRequest,
   PopupRequest,
@@ -320,6 +320,31 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
     { delivery: consignmentDeliveryToMe, anchors: rgbAtOutpoints },
   )
 
+  // Findings shown on the review screen BEFORE approval, most-severe first. Mined-ancestry is an
+  // objective on-chain fact the user can't override (a non-mined consignment may be forged) → a
+  // BLOCK finding that disables Sign (re-enforced in finalize). The delivered-value concern is
+  // subjective (only the user knows their intent) → a WARN finding. Pull the SPV check here, not
+  // in finalize, so the user sees it before committing — and so a verify error blocks nicely
+  // instead of crashing the build.
+  const findings: SignFinding[] = []
+  if (intent.consignment) {
+    try {
+      const witnessIds = await consignmentWitnessIds(intent.consignment)
+      // The swap tx is the wallet-derived exempt witness (not yet broadcast).
+      const verdict = await verifyMinedAncestry(witnessIds, { network, exempt: [decoded.txid] })
+      if (!verdict.all_mined) {
+        findings.push({ severity: 'block', title: 'On-chain history not confirmed', detail: describeMinedFailure(verdict) })
+      }
+    } catch (e) {
+      findings.push({
+        severity: 'block',
+        title: 'Could not verify on-chain history',
+        detail: `The wallet couldn't confirm this asset's history is mined on-chain: ${(e as Error).message}. Signing is blocked for your safety.`,
+      })
+    }
+  }
+  if (warning) findings.push({ severity: 'warn', title: 'RGB couldn’t be fully verified', detail: warning })
+
   const { connected = [] } = await chrome.storage.local.get('connected')
   return assembleSignRequest({
     id,
@@ -328,15 +353,13 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
     network,
     decoded,
     psbtBase64: intent.psbt,
-    quoteId: intent.quoteId,
-    makerId: intent.makerId,
     contractId,
     assetTicker,
     assetPrecision,
     rgbDeltaRaw,
     // The maker's consignment, if the dApp forwarded it — drives the SPV pre-sign gate.
     consignment: intent.consignment,
-    warning,
+    findings,
   })
 }
 
@@ -358,20 +381,12 @@ async function finalize(id: string, approve: boolean): Promise<SignResult> {
       const xprv = await signingKey()
       if (!xprv) throw new Error('wallet is locked')
 
-      // SPV pre-sign gate: when the dApp forwarded the maker's consignment, confirm its
-      // witness ancestry is actually mined on-chain BEFORE signing away BTC — verified
-      // locally (esplora self-fetch + in-wasm merkle/depth check), trusting no server's
-      // verdict. The swap tx itself is the WALLET-DERIVED exempt witness (not yet broadcast).
-      // Absent a consignment (e.g. a non-swap sign) the gate is skipped.
-      const req = p.request
-      if (req.consignment) {
-        const witnessIds = await consignmentWitnessIds(req.consignment)
-        const exempt = req.swapTxid ? [req.swapTxid] : []
-        const verdict = await verifyMinedAncestry(witnessIds, { network: req.network, exempt })
-        if (!verdict.all_mined) {
-          throw new Error(`consignment ancestry not mined on-chain — refusing to sign: ${describeRejections(verdict)}`)
-        }
-      }
+      // Enforce the BLOCK findings computed pre-approval (mined-ancestry SPV, etc.). The UI
+      // disables Sign on a block, but we re-enforce here in the trusted worker so a bypassed
+      // popup can't get a blocked request signed. (The findings were computed seconds ago in
+      // this same worker — authoritative; no need to re-run the network check.)
+      const blocking = p.request.findings?.find((f) => f.severity === 'block')
+      if (blocking) throw new Error(blocking.detail)
 
       const signedPsbt = signPsbt(p.request.psbtBase64, p.request.signInputs ?? [], xprv)
       result = { ok: true, signedPsbt }

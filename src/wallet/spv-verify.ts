@@ -150,9 +150,22 @@ export async function verifyMinedAncestry(
   return verdict
 }
 
-/** Human-readable summary of why a verdict failed (for logs / the sign screen). */
+/** Technical summary of why a verdict failed (for logs). */
 export function describeRejections(verdict: SpvVerdict): string {
   return verdict.rejected
     .map(([txid, reason]) => `${txid.slice(0, 12)}…: ${JSON.stringify(reason)}`)
     .join('; ')
+}
+
+/** A friendly one-line explanation of a failed verdict, for the sign screen. Distinguishes
+ *  not-yet-confirmed (the common, transient case) from a structural verification failure. */
+export function describeMinedFailure(verdict: SpvVerdict): string {
+  const unmined = verdict.rejected.filter(([, r]) => typeof r === 'object' && r !== null && 'Unmined' in r).length
+  const structural = verdict.rejected.length - unmined
+  if (structural === 0 && unmined > 0) {
+    const txs = verdict.checked === 1 ? 'transaction' : 'transactions'
+    const verb = unmined === 1 ? "isn't" : "aren't"
+    return `${unmined} of ${verdict.checked} ${txs} in this asset's on-chain history ${verb} confirmed yet — the RGB may not be real. Signing is blocked until it confirms.`
+  }
+  return `The wallet couldn't verify this asset's on-chain history (${describeRejections(verdict)}). Signing is blocked for your safety.`
 }

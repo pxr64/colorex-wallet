@@ -20,6 +20,8 @@ export const T = {
   ok: '#3DAE6B',
   okSoft: 'rgba(61,174,107,0.12)',
   warn: '#C98A2E',
+  bad: '#C0392B',
+  badSoft: 'rgba(192,57,43,0.10)',
   body: '"Geist", -apple-system, sans-serif',
   mono: '"Geist Mono", ui-monospace, monospace',
 } as const

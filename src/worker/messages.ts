@@ -4,18 +4,16 @@
 
 import type { SignRequest, SignResult } from '../types/sign-request'
 
-/** dApp-supplied sign request. The dApp orchestrates the swap (broker round-trip)
- *  and hands the wallet the maker's PSBT; the wallet is a wallet-agnostic SIGNER —
- *  it independently DECODES the PSBT to compute what the user actually signs and
- *  never trusts the dApp's amounts for the BTC side. `assetId`/`amount` are RGB
- *  display hints, validated only on consignment-accept. */
+/** dApp-supplied sign request. The dApp hands the wallet a partial PSBT; the wallet is a
+ *  wallet-agnostic SIGNER — it DECODES the PSBT and the consignment itself to compute what the
+ *  user actually signs, trusting nothing dApp-claimed. Only plain-tx inputs are carried: the
+ *  PSBT, the RGB asset id (a display LABEL only — the amount is wallet-derived), and the
+ *  consignment (for pre-sign RGB verification). Swap-orchestration fields (amount, quoteId,
+ *  makerId) are deliberately NOT consumed — the wallet doesn't need them. */
 export interface SignAndSendIntent {
   psbt: string // maker's partial PSBT (base64), built by the dApp via the broker
-  assetId?: string
-  amount?: number
-  quoteId?: string
-  makerId?: string
-  consignment?: string
+  assetId?: string // RGB asset hint — display label only
+  consignment?: string // the maker's RGB consignment, for the pre-sign verification
 }
 
 /** page → worker (relayed by the content script). The queue kinds

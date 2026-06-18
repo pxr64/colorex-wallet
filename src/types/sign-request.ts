@@ -33,12 +33,9 @@ export interface SignRequest {
   faviconUrl?: string
   recognized: boolean // known/connected origin? → trust pill + risk branch
   action: 'Sign transaction'
-  intent: string // 'Swap on Colorex'
-  counterparty?: string // maker id / 'pool:…'
   contract: { kind: string; id: string } // {'RGB-20 transfer', 'rgb:2Yx…RX01'}
 
   deltas: BalanceDelta[] // ⭐ the simulated outcome — DERIVED, never dApp-supplied
-  rate?: string // '1 USDT-RGB = 0.39 RGBX' (swaps only)
 
   fee: { rateSatVb: number; btc: number; usd: number }
   network: 'signet' | 'testnet' | 'mainnet' | string
@@ -48,21 +45,20 @@ export interface SignRequest {
   psbtBase64: string // unsigned PSBT (from the maker, via /accept)
   consignment?: string // RGB consignment ref / blob
 
-  // Wallet-DERIVED swap txid (the unsigned tx's id, == eventual witness txid). The exempt
-  // witness for the SPV pre-sign gate — the not-yet-broadcast swap tx. Never dApp-supplied.
-  swapTxid?: string
-
-  // Colorex correlation for the /sign call.
-  quoteId?: string
-
   // Which inputs the approval window must sign + their derivations (from decode).
   signInputs?: SignInput[]
 
-  // A prominent, WALLET-DERIVED risk warning to surface above the balance changes. Set
-  // when the wallet can't fully verify the swap but isn't hard-refusing — e.g. a sell that
-  // spends RGB anchors with no consignment to confirm what comes back, where the user must
-  // see the full amount at risk of being drained before approving.
-  warning?: string
+  // WALLET-DERIVED findings surfaced on the review screen BEFORE approval, rendered by
+  // severity. `block` (e.g. the consignment's on-chain history isn't mined) disables Sign and
+  // is enforced in `finalize`; `warn` (e.g. spending RGB anchors with no consignment to verify
+  // what comes back) is informational — the user stays the final approver.
+  findings?: SignFinding[]
+}
+
+export interface SignFinding {
+  severity: 'block' | 'warn'
+  title: string // short label, e.g. 'On-chain history not confirmed'
+  detail: string // human-readable sentence
 }
 
 export type SignResult =

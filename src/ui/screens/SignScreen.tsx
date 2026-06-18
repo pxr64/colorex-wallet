@@ -79,6 +79,9 @@ export function SignScreen({ requestId, onClose }: { requestId: string; onClose?
 
   const outflows = req.deltas.filter((d) => d.delta < 0)
   const inflows = req.deltas.filter((d) => d.delta > 0)
+  // A `block` finding (e.g. on-chain history not mined) disables signing — the user can't
+  // override an objective on-chain fact. `warn` findings leave Sign enabled.
+  const blocked = (req.findings ?? []).some((f) => f.severity === 'block')
 
   // ============================ SIGNING ============================
   if (step === 'signing') {
@@ -225,17 +228,21 @@ export function SignScreen({ requestId, onClose }: { requestId: string; onClose?
             </span>
           </div>
 
-          {/* wallet-derived risk warning — loud, above the outcome (e.g. a sell spending
-              RGB anchors with no consignment to verify what comes back) */}
-          {req.warning && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', border: `1px solid ${T.warn}`, borderRadius: 13, background: 'rgba(201,138,46,0.12)' }}>
-              <span style={{ color: T.warn, flex: '0 0 auto', marginTop: 1 }}><Icon.alert /></span>
-              <div style={{ display: 'grid', gap: 3 }}>
-                <span style={{ fontFamily: T.body, fontSize: 12.5, fontWeight: 600, color: T.warn }}>RGB at risk — verify carefully</span>
-                <Mono style={{ fontSize: 10.5, color: T.inkSoft }}><span style={{ lineHeight: 1.5 }}>{req.warning}</span></Mono>
+          {/* wallet-derived findings — loud, above the outcome. `block` (red) disables Sign;
+              `warn` (amber) is informational. Computed pre-approval so the user sees them first. */}
+          {(req.findings ?? []).map((f, i) => {
+            const c = f.severity === 'block' ? T.bad : T.warn
+            const bg = f.severity === 'block' ? T.badSoft : 'rgba(201,138,46,0.12)'
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', border: `1px solid ${c}`, borderRadius: 13, background: bg }}>
+                <span style={{ color: c, flex: '0 0 auto', marginTop: 1 }}><Icon.alert /></span>
+                <div style={{ display: 'grid', gap: 3 }}>
+                  <span style={{ fontFamily: T.body, fontSize: 12.5, fontWeight: 600, color: c }}>{f.title}</span>
+                  <Mono style={{ fontSize: 10.5, color: T.inkSoft }}><span style={{ lineHeight: 1.5 }}>{f.detail}</span></Mono>
+                </div>
               </div>
-            </div>
-          )}
+            )
+          })}
 
           {/* simulated outcome — the hero */}
           <div style={{ border: `1px solid ${T.hair}`, borderRadius: 16, background: T.card, overflow: 'hidden' }}>
@@ -260,19 +267,12 @@ export function SignScreen({ requestId, onClose }: { requestId: string; onClose?
               <DeltaRow key={`i${i}`} d={d} caption="You receive" />
             ))}
 
-            {req.rate && (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 15px', background: T.bg, borderTop: `1px solid ${T.hair}` }}>
-                <Mono style={{ fontSize: 10, color: T.mute }}>Rate</Mono>
-                <Mono style={{ fontSize: 10.5, color: T.inkSoft }}><span className="cxw-tab">{req.rate}</span></Mono>
-              </div>
-            )}
           </div>
 
           {/* details */}
           <div style={{ border: `1px solid ${T.hair}`, borderRadius: 14, overflow: 'hidden' }}>
             {(
               [
-                ['Interacting with', req.intent, req.counterparty ?? ''],
                 ['Contract', req.contract.kind, req.contract.id],
                 ['Network fee', `${req.fee.rateSatVb} sat/vB`, `${fmt(req.fee.btc, 'tBTC')} BTC · ${usd(req.fee.usd)}`],
                 ['Network', 'Bitcoin', req.network],
@@ -345,8 +345,22 @@ export function SignScreen({ requestId, onClose }: { requestId: string; onClose?
       {/* actions */}
       <div style={{ padding: '12px 16px 16px', borderTop: `1px solid ${T.hair}`, background: T.bg, display: 'flex', gap: 10 }}>
         <button className="cxw-btn" onClick={reject} style={{ flex: '0 0 auto', padding: '0 22px', height: 50, border: `1px solid ${T.hairStrong}`, borderRadius: 13, background: T.card, color: T.ink, fontFamily: T.body, fontSize: 14.5, fontWeight: 500 }}>Reject</button>
-        <button className="cxw-btn" onClick={sign} style={{ flex: 1, height: 50, border: 'none', borderRadius: 13, background: T.accent, color: T.accentInk, fontFamily: T.body, fontSize: 15, fontWeight: 600, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, boxShadow: '0 10px 26px -12px rgba(184,90,44,0.7)' }}>
-          <Icon.lock /> Sign
+        <button
+          className="cxw-btn"
+          onClick={sign}
+          disabled={blocked}
+          title={blocked ? 'Signing is blocked — see the finding above' : undefined}
+          style={{
+            flex: 1, height: 50, border: 'none', borderRadius: 13,
+            background: blocked ? T.hairStrong : T.accent,
+            color: blocked ? T.mute : T.accentInk,
+            fontFamily: T.body, fontSize: 15, fontWeight: 600,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            cursor: blocked ? 'not-allowed' : 'pointer',
+            boxShadow: blocked ? 'none' : '0 10px 26px -12px rgba(184,90,44,0.7)',
+          }}
+        >
+          <Icon.lock /> {blocked ? 'Blocked' : 'Sign'}
         </button>
       </div>
     </div>

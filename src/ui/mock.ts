@@ -7,14 +7,11 @@ export const MOCK_SIGN_REQUEST: SignRequest = {
   origin: 'app.colorex.io',
   recognized: true,
   action: 'Sign transaction',
-  intent: 'Swap on Colorex',
-  counterparty: 'pool:utx-rgbx/9af3',
   contract: { kind: 'RGB-20 transfer', id: 'rgb:2Yx…RX01' },
   deltas: [
     { sym: 'USDT-RGB', delta: -1500, usd: 1500, isRgb: true },
     { sym: 'RGBX', delta: 585, usd: 1485, isRgb: true },
   ],
-  rate: '1 USDT-RGB = 0.39 RGBX',
   fee: { rateSatVb: 8, btc: 0.00002, usd: 1.3 },
   network: 'signet',
   inputs: [
@@ -26,5 +23,4 @@ export const MOCK_SIGN_REQUEST: SignRequest = {
     { label: 'Change → you', detail: 'tb1q…0qz3', amount: '0.00018 tBTC' },
   ],
   psbtBase64: 'cHNidP8B(mock-unsigned-psbt)',
-  quoteId: 'mock-quote',
 }

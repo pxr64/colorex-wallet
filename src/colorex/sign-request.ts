@@ -3,7 +3,7 @@
 // RGB amount the wallet asked for, validated later on consignment-accept). Every
 // number here is wallet-derived; nothing is taken from the dApp.
 
-import type { BalanceDelta, PsbtLeg, SignInput, SignRequest } from '../types/sign-request'
+import type { BalanceDelta, PsbtLeg, SignFinding, SignInput, SignRequest } from '../types/sign-request'
 
 export interface DecodedPsbt {
   /** The unsigned tx's id == the eventual on-chain witness txid. Wallet-derived exempt for
@@ -30,8 +30,6 @@ export interface AssembleParams {
   network: string
   decoded: DecodedPsbt
   psbtBase64: string
-  quoteId?: string
-  makerId?: string
   contractId: string
   assetTicker: string
   assetPrecision: number
@@ -40,9 +38,8 @@ export interface AssembleParams {
   /** The maker's RGB consignment (base64), if the dApp forwarded it. Drives the SPV
    *  pre-sign mined-ancestry gate in the worker. */
   consignment?: string
-  /** Wallet-derived risk warning to surface prominently (e.g. a sell spending anchors
-   *  with no consignment to verify what returns). */
-  warning?: string
+  /** Wallet-derived findings (block/warn) to surface prominently before approval. */
+  findings?: SignFinding[]
 }
 
 const toBtc = (sats: number) => sats / 1e8
@@ -82,8 +79,6 @@ export function assembleSignRequest(p: AssembleParams): SignRequest {
     origin: p.origin,
     recognized: p.recognized,
     action: 'Sign transaction',
-    intent: 'Swap on Colorex',
-    counterparty: p.makerId,
     contract: { kind: 'RGB-20 transfer', id: p.contractId },
     deltas,
     fee: { rateSatVb: estimateRateSatVb(p.decoded), btc: toBtc(p.decoded.feeSats), usd: 0 },
@@ -91,11 +86,8 @@ export function assembleSignRequest(p: AssembleParams): SignRequest {
     inputs,
     outputs,
     psbtBase64: p.psbtBase64,
-    quoteId: p.quoteId,
     signInputs: p.decoded.signInputs,
     consignment: p.consignment,
-    warning: p.warning,
-    // Wallet-DERIVED swap txid (from the PSBT), the exempt witness for the SPV gate.
-    swapTxid: p.decoded.txid,
+    findings: p.findings,
   }
 }
