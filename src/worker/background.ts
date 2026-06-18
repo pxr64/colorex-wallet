@@ -13,6 +13,7 @@ import { StoreWalletSdk } from '../sdk/store-sdk'
 import type { WalletSdk } from '../sdk/wallet-sdk'
 import {
   accountBalances,
+  consignmentWitnessIds,
   createInvoice,
   createTransfer,
   decodePsbt,
@@ -20,6 +21,7 @@ import {
   signingKey,
 } from '../wallet/store'
 import { signPsbt } from '../wallet/sign'
+import { describeRejections, verifyMinedAncestry } from '../wallet/spv-verify'
 import { drain, enqueue, getQueue, removeItem } from '../wallet/import-queue'
 import type { SignRequest, SignResult } from '../types/sign-request'
 import type {
@@ -277,6 +279,8 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
     assetTicker,
     assetPrecision,
     rgbAmountRaw: intent.amount ?? 0,
+    // The maker's consignment, if the dApp forwarded it — drives the SPV pre-sign gate.
+    consignment: intent.consignment,
     // Direction is INFERRED from the wallet's own BTC delta, not trusted from the
     // dApp: a buy spends BTC for RGB (delta < 0); a sell receives BTC for RGB
     // (delta >= 0). Only orients the RGB balance-change row's sign.
@@ -301,6 +305,22 @@ async function finalize(id: string, approve: boolean): Promise<SignResult> {
     try {
       const xprv = await signingKey()
       if (!xprv) throw new Error('wallet is locked')
+
+      // SPV pre-sign gate: when the dApp forwarded the maker's consignment, confirm its
+      // witness ancestry is actually mined on-chain BEFORE signing away BTC — verified
+      // locally (esplora self-fetch + in-wasm merkle/depth check), trusting no server's
+      // verdict. The swap tx itself is the WALLET-DERIVED exempt witness (not yet broadcast).
+      // Absent a consignment (e.g. a non-swap sign) the gate is skipped.
+      const req = p.request
+      if (req.consignment) {
+        const witnessIds = await consignmentWitnessIds(req.consignment)
+        const exempt = req.swapTxid ? [req.swapTxid] : []
+        const verdict = await verifyMinedAncestry(witnessIds, { network: req.network, exempt })
+        if (!verdict.all_mined) {
+          throw new Error(`consignment ancestry not mined on-chain — refusing to sign: ${describeRejections(verdict)}`)
+        }
+      }
+
       const signedPsbt = signPsbt(p.request.psbtBase64, p.request.signInputs ?? [], xprv)
       result = { ok: true, signedPsbt }
     } catch (e) {

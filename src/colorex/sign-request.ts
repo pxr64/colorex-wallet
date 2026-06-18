@@ -6,6 +6,9 @@
 import type { BalanceDelta, PsbtLeg, SignInput, SignRequest } from '../types/sign-request'
 
 export interface DecodedPsbt {
+  /** The unsigned tx's id == the eventual on-chain witness txid. Wallet-derived exempt for
+   *  the SPV pre-sign gate (the not-yet-broadcast swap tx). */
+  txid: string
   feeSats: number
   btcDeltaSats: number
   btcInOursSats: number
@@ -34,6 +37,9 @@ export interface AssembleParams {
   assetPrecision: number
   rgbAmountRaw: number // quote amount in raw units (precision applied for display)
   side: 'buy' | 'sell'
+  /** The maker's RGB consignment (base64), if the dApp forwarded it. Drives the SPV
+   *  pre-sign mined-ancestry gate in the worker. */
+  consignment?: string
 }
 
 const toBtc = (sats: number) => sats / 1e8
@@ -84,5 +90,8 @@ export function assembleSignRequest(p: AssembleParams): SignRequest {
     psbtBase64: p.psbtBase64,
     quoteId: p.quoteId,
     signInputs: p.decoded.signInputs,
+    consignment: p.consignment,
+    // Wallet-DERIVED swap txid (from the PSBT), the exempt witness for the SPV gate.
+    swapTxid: p.decoded.txid,
   }
 }

@@ -48,6 +48,10 @@ export interface SignRequest {
   psbtBase64: string // unsigned PSBT (from the maker, via /accept)
   consignment?: string // RGB consignment ref / blob
 
+  // Wallet-DERIVED swap txid (the unsigned tx's id, == eventual witness txid). The exempt
+  // witness for the SPV pre-sign gate — the not-yet-broadcast swap tx. Never dApp-supplied.
+  swapTxid?: string
+
   // Colorex correlation for the /sign call.
   quoteId?: string
 

@@ -302,6 +302,11 @@ pub fn decode_psbt(
     let fee = total_in.saturating_sub(total_out);
     let btc_delta = out_ours as i64 - in_ours as i64;
     Ok(serde_json::json!({
+        // The unsigned tx's id == the eventual on-chain witness txid (segwit txid is over
+        // non-witness data, fixed at PSBT-build since inputs/outputs don't change). Used by
+        // the SPV pre-sign gate as the WALLET-DERIVED exempt witness (the not-yet-broadcast
+        // swap tx) — never trust a dApp-supplied txid for this.
+        "txid": psbt.txid().to_string(),
         "feeSats": fee,
         "btcInOursSats": in_ours,
         "btcOutOursSats": out_ours,

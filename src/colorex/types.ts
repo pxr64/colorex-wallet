@@ -59,7 +59,13 @@ export type SettlementStatus =
 
 export interface SwapTransfer {
   partial_psbt: string // base64, unsigned (maker-built)
-  consignment?: string // base64 (sell side; buy side arrives post-/sign)
+  // base64. The maker returns this at /accept on BOTH legs (the buy-side consignment proves
+  // the RGB the taker is buying — its ancestry). The dApp should forward it to the wallet in
+  // the sign intent so the wallet can run the SPV mined-ancestry gate BEFORE signing.
+  consignment?: string
+  // Pre-computed witness txid of the not-yet-broadcast swap tx (the exempt hop on a buy). The
+  // wallet re-derives this from the PSBT rather than trusting it.
+  expected_witness_txid?: string
 }
 
 export interface SettlementIntent {
