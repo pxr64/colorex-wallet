@@ -137,52 +137,6 @@ pub fn verify_consignment_spv(
     serde_json::to_string(&verdict).map_err(|e| JsError::new(&e.to_string()))
 }
 
-/// SPV verification with **trusted** headers (Tier 1 — signet/test). The proof-pack's
-/// `headers` map supplies the block headers (trusted, *not* PoW-validated) and `anchors`
-/// supply heights; a `TrustedHeaderSource` is built from them. Use only where the client
-/// accepts the indexer's headers — **signet has no header PoW**, so this is the practical
-/// path there; mainnet must use the checkpoint-validated [`verify_consignment_spv`].
-///
-/// The wallet self-fetches, per witness, the merkle proof + that block's header from esplora,
-/// assembles them into `pack_json`, and calls this. Returns the `SpvVerdict` JSON.
-#[wasm_bindgen]
-pub fn verify_consignment_trusted(
-    witness_txids_json: &str,
-    exempt_txids_json: &str,
-    pack_json: &str,
-    tip_height: u32,
-    min_confs: u32,
-) -> Result<String, JsError> {
-    let witness_txids: Vec<String> = serde_json::from_str(witness_txids_json)
-        .map_err(|e| JsError::new(&format!("witness_txids: {e}")))?;
-    let exempt: HashSet<String> = serde_json::from_str::<Vec<String>>(exempt_txids_json)
-        .map_err(|e| JsError::new(&format!("exempt: {e}")))?
-        .into_iter()
-        .collect();
-    let pack = spv::SpvProofPack::from_json(pack_json.as_bytes()).map_err(|e| JsError::new(&e))?;
-
-    // Build trusted (block_hash, raw header, height) triples from the pack itself: heights from
-    // the anchors, raw headers from the `headers` map.
-    let mut height_of: HashMap<String, u32> = HashMap::new();
-    for inc in pack.anchors.values() {
-        height_of.insert(inc.block_hash.to_ascii_lowercase(), inc.block_height);
-    }
-    let mut triples: Vec<(String, Vec<u8>, u32)> = Vec::with_capacity(pack.headers.len());
-    for (block_hash, header_hex) in &pack.headers {
-        let bytes = spv::merkle::hex_to_bytes(header_hex)
-            .ok_or_else(|| JsError::new("pack header is not valid hex"))?;
-        let height = *height_of
-            .get(&block_hash.to_ascii_lowercase())
-            .ok_or_else(|| JsError::new("pack header has no matching anchor height"))?;
-        triples.push((block_hash.clone(), bytes, height));
-    }
-    let source =
-        spv::TrustedHeaderSource::new(&triples, tip_height).map_err(|e| JsError::new(&e))?;
-
-    let verdict = spv::verify_pack(&witness_txids, &exempt, &pack, &source, min_confs);
-    serde_json::to_string(&verdict).map_err(|e| JsError::new(&e.to_string()))
-}
-
 /// SPV verification over **checkpoint-validated segments** — the dense-checkpoint path used on
 /// both networks (network-gated: signet skips PoW/difficulty, mainnet enforces them). The wallet
 /// picks, per witness, the nearest baked/local checkpoint and fetches the bounded header run from

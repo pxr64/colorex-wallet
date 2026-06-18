@@ -30,7 +30,7 @@ pub mod proofpack;
 pub mod verify;
 
 pub use headers::{
-    nearest_checkpoint, Checkpoint, CheckpointHeaderSource, Network, TrustedHeaderSource,
+    nearest_checkpoint, Checkpoint, CheckpointHeaderSource, Network,
 };
 pub use proofpack::{SpvProofPack, WitnessInclusion};
 pub use verify::{verify_pack, HeaderInfo, HeaderSource, RejectReason, SpvVerdict};
