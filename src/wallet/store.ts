@@ -745,6 +745,14 @@ export async function consignmentDeliveryToMe(
   )
 }
 
+/** The RGB assets (+ balances) the wallet holds at exactly `outpoints` ("txid:vout").
+ *  Wallet-derived from the stock — used to value the k10 anchors a sell spends (the RGB
+ *  AT RISK), without trusting the dApp's claimed asset/amount. */
+export async function rgbAtOutpoints(outpoints: string[]): Promise<Asset[]> {
+  const s = await openStock()
+  return JSON.parse(s.list_assets_owned(JSON.stringify(outpoints))) as Asset[]
+}
+
 /** Accept a consignment into the stock with caller-supplied witness ords, then
  *  persist. Idempotent: re-accepting an already-accepted consignment with fresh
  *  (now-mined) ords promotes the allocation's WitnessOrd Tentative→Mined — the

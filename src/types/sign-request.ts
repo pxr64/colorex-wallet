@@ -57,6 +57,12 @@ export interface SignRequest {
 
   // Which inputs the approval window must sign + their derivations (from decode).
   signInputs?: SignInput[]
+
+  // A prominent, WALLET-DERIVED risk warning to surface above the balance changes. Set
+  // when the wallet can't fully verify the swap but isn't hard-refusing — e.g. a sell that
+  // spends RGB anchors with no consignment to confirm what comes back, where the user must
+  // see the full amount at risk of being drained before approving.
+  warning?: string
 }
 
 export type SignResult =

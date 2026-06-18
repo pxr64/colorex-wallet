@@ -225,6 +225,18 @@ export function SignScreen({ requestId, onClose }: { requestId: string; onClose?
             </span>
           </div>
 
+          {/* wallet-derived risk warning — loud, above the outcome (e.g. a sell spending
+              RGB anchors with no consignment to verify what comes back) */}
+          {req.warning && (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', border: `1px solid ${T.warn}`, borderRadius: 13, background: 'rgba(201,138,46,0.12)' }}>
+              <span style={{ color: T.warn, flex: '0 0 auto', marginTop: 1 }}><Icon.alert /></span>
+              <div style={{ display: 'grid', gap: 3 }}>
+                <span style={{ fontFamily: T.body, fontSize: 12.5, fontWeight: 600, color: T.warn }}>RGB at risk — verify carefully</span>
+                <Mono style={{ fontSize: 10.5, color: T.inkSoft }}><span style={{ lineHeight: 1.5 }}>{req.warning}</span></Mono>
+              </div>
+            </div>
+          )}
+
           {/* simulated outcome — the hero */}
           <div style={{ border: `1px solid ${T.hair}`, borderRadius: 16, background: T.card, overflow: 'hidden' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 15px 9px', borderBottom: `1px solid ${T.hair}` }}>

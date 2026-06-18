@@ -18,7 +18,9 @@ import {
   createInvoice,
   createTransfer,
   decodePsbt,
+  formatUnits,
   lock,
+  rgbAtOutpoints,
   signingKey,
 } from '../wallet/store'
 import { signPsbt } from '../wallet/sign'
@@ -295,15 +297,15 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
   const decoded = await decodePsbt(intent.psbt, network)
   const side: 'buy' | 'sell' = decoded.btcDeltaSats < 0 ? 'buy' : 'sell'
 
-  // RGB display hints. By DEFAULT these are dApp-claimed (display only, validated on
-  // consignment-accept) — used for the sell leg, where the RGB delta is the change
-  // consignment + spent seals (a later increment). For a BUY we OVERRIDE them entirely
-  // below with the wallet-derived consignment delivery, so nothing dApp-claimed reaches
-  // the confirmation's RGB row.
+  // RGB display hints. These start dApp-claimed (display only) but are OVERRIDDEN with
+  // wallet-derived figures below for both legs: a BUY from the consignment's delivery to
+  // our seals; a SELL from the RGB at the anchors we spend (net of any change). Nothing
+  // dApp-claimed should reach the confirmation's RGB row for a real swap.
   let assetTicker = intent.assetId?.slice(0, 10) ?? 'RGB'
   let assetPrecision = 0
   let contractId = intent.assetId ?? ''
   let rgbAmountRaw = intent.amount ?? 0
+  let warning: string | undefined
   if (intent.assetId) {
     try {
       const bal = await sdk.getAssetBalance(intent.assetId)
@@ -346,6 +348,42 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
     rgbAmountRaw = delivery.amount
   }
 
+  // SELL-SWAP detection is WALLET-DERIVED too: spending our own k10 (RGB) anchors. The RGB
+  // at those anchors is what's AT RISK; we value it from our own stash (`rgbAtOutpoints`),
+  // never the dApp's claim. The maker's consignment holds BOTH legs of the swap transition —
+  // the sold output (→ maker) and the change (→ our seal) — so reading its delivery to OUR
+  // seals yields the change coming back, and the net we part with is `gross − change`.
+  const spentAnchors = decoded.inputs.filter((i) => i.ours && i.keychain === 10).map((i) => i.outpoint)
+  if (side === 'sell' && spentAnchors.length > 0) {
+    const atRisk = await rgbAtOutpoints(spentAnchors)
+    // Single-asset sell (the only flow today); sum defensively in case of multiple.
+    const grossSpent = atRisk.reduce((n, a) => n + a.balance, 0)
+    const a0 = atRisk[0]
+    if (a0) {
+      assetTicker = a0.ticker
+      assetPrecision = a0.precision
+      contractId = a0.contractId
+    }
+    if (intent.consignment) {
+      // Change returns to our k10 output on the swap tx (witness-vout), the same shape as a
+      // buy receive. Net parted-with = gross spent − change back to us.
+      const changeSeals = decoded.outputs
+        .filter((o) => o.ours && o.keychain === 10)
+        .map((o) => `${decoded.txid}:${o.vout}`)
+      const change = changeSeals.length > 0 ? await consignmentDeliveryToMe(intent.consignment, changeSeals, network) : null
+      rgbAmountRaw = Math.max(0, grossSpent - (change?.amount ?? 0))
+    } else {
+      // No consignment to verify the swap, yet we're spending RGB anchors: we cannot confirm
+      // ANY of it comes back. Surface the full amount at risk and warn loudly — the user is
+      // the final approver, but must not sign this blind (gap A3: dApp must forward it).
+      rgbAmountRaw = grossSpent
+      warning =
+        `This swap spends RGB anchors holding ${formatUnits(grossSpent, assetPrecision)} ${assetTicker}, but no ` +
+        `consignment was provided to verify what you receive in return. The wallet cannot confirm any of it ` +
+        `comes back — signing risks draining the full amount. Only proceed if you trust this site and expect this exact sale.`
+    }
+  }
+
   const { connected = [] } = await chrome.storage.local.get('connected')
   return assembleSignRequest({
     id,
@@ -362,6 +400,7 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
     rgbAmountRaw,
     // The maker's consignment, if the dApp forwarded it — drives the SPV pre-sign gate.
     consignment: intent.consignment,
+    warning,
     side,
   })
 }

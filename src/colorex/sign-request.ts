@@ -40,6 +40,9 @@ export interface AssembleParams {
   /** The maker's RGB consignment (base64), if the dApp forwarded it. Drives the SPV
    *  pre-sign mined-ancestry gate in the worker. */
   consignment?: string
+  /** Wallet-derived risk warning to surface prominently (e.g. a sell spending anchors
+   *  with no consignment to verify what returns). */
+  warning?: string
 }
 
 const toBtc = (sats: number) => sats / 1e8
@@ -91,6 +94,7 @@ export function assembleSignRequest(p: AssembleParams): SignRequest {
     quoteId: p.quoteId,
     signInputs: p.decoded.signInputs,
     consignment: p.consignment,
+    warning: p.warning,
     // Wallet-DERIVED swap txid (from the PSBT), the exempt witness for the SPV gate.
     swapTxid: p.decoded.txid,
   }
