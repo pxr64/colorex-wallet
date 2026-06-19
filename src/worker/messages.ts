@@ -15,6 +15,7 @@ export interface SignAndSendIntent {
   assetId?: string // RGB asset hint — display label only
   consignment?: string // the maker's RGB consignment, for the pre-sign verification
   expected_witness_txid?: string // swap-txid hint (advisory) — the wallet derives the exempt witness from the PSBT
+  saleConsignment?: string // sell only: the taker's OWN provenance consignment, for the #38 input-set check
 }
 
 /** page → worker (relayed by the content script). The queue kinds

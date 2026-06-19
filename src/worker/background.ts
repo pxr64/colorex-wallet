@@ -15,6 +15,7 @@ import type { WalletSdk } from '../sdk/wallet-sdk'
 import {
   accountBalances,
   consignmentDeliveryToMe,
+  consignmentSaleOutpoints,
   consignmentWitnessIds,
   createInvoice,
   createTransfer,
@@ -346,6 +347,55 @@ async function buildSignRequest(id: string, intent: SignAndSendIntent, origin: s
   // RGB value-flow findings (delivered-value / invalid-consignment BLOCKs, spend WARNs) derived
   // above — merged after the SPV mined-ancestry findings. `finalize` re-enforces any `block`.
   findings.push(...rgbFindings)
+
+  // #38 swap-leg gates — only when the maker published a swap tx (pure RGB sends carry no
+  // expected_witness_txid and are exempt). Both are wallet-derived from the PSBT (stateless).
+  if (intent.expected_witness_txid) {
+    // (e) anti-substitution: the PSBT we're asked to sign must BE the swap tx the maker published.
+    if (decoded.txid !== intent.expected_witness_txid) {
+      findings.push({
+        severity: 'block',
+        title: 'Transaction doesn’t match the quote',
+        detail: `This PSBT (${decoded.txid.slice(0, 12)}…) is not the swap the maker published — it may have been substituted. Signing is blocked for your safety.`,
+      })
+    }
+    // (d) selling RGB (net out) must pay BTC back to OUR address — a maker routing the payout to
+    // itself leaves us with nothing. The exact amount is the user's call (price); zero is theft.
+    if (rgbDeltaRaw < 0 && decoded.btcOutOursSats === 0) {
+      findings.push({
+        severity: 'block',
+        title: 'No BTC payout to your wallet',
+        detail: 'You are sending RGB but this transaction pays no BTC back to your wallet — the maker may keep both. Signing is blocked for your safety.',
+      })
+    }
+  }
+
+  // #38 (a) sell-side anti-sweep: the RGB anchors this PSBT spends must be a SUBSET of the outpoints
+  // the taker named for sale (its own provenance consignment). The maker can't forge a provenance
+  // consignment over our OTHER UTXOs, so any spent k10 anchor beyond its named set is a spliced-in
+  // sweep. Stateless: the provenance consignment is the artifact (no persisted session state).
+  if (intent.saleConsignment) {
+    try {
+      const k10Inputs = decoded.inputs.filter((i) => i.ours && i.keychain === 10).map((i) => i.outpoint)
+      if (k10Inputs.length > 0) {
+        const named = new Set(await consignmentSaleOutpoints(intent.saleConsignment, network))
+        const spliced = k10Inputs.filter((o) => !named.has(o))
+        if (spliced.length > 0) {
+          findings.push({
+            severity: 'block',
+            title: 'Transaction spends RGB you didn’t offer',
+            detail: `This transaction spends ${spliced.length} RGB anchor(s) beyond the ones you offered for sale — the maker may be sweeping your other holdings. Signing is blocked for your safety.`,
+          })
+        }
+      }
+    } catch (e) {
+      findings.push({
+        severity: 'block',
+        title: 'Couldn’t verify the RGB being spent',
+        detail: `The wallet couldn't confirm the spent RGB matches your sale (${(e as Error).message}). Signing is blocked for your safety.`,
+      })
+    }
+  }
 
   const { connected = [] } = await chrome.storage.local.get('connected')
   return assembleSignRequest({

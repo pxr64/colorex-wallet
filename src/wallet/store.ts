@@ -726,6 +726,15 @@ export async function consignmentWitnessIds(consignmentB64: string): Promise<str
   return JSON.parse(s.consignment_witness_ids(b64ToBytes(consignmentB64))) as string[]
 }
 
+/** The outpoints a (provenance) consignment names as its terminal allocations — the set the taker
+ *  offered for sale. Validated into a FRESH scratch stock in wasm, so only THIS consignment's
+ *  terminals surface (not the wallet's other holdings). The #38 sell input-set check requires the
+ *  PSBT's spent RGB anchors to be a subset of these — else the maker spliced in our other UTXOs. */
+export async function consignmentSaleOutpoints(consignmentB64: string, network: string): Promise<string[]> {
+  const s = await openStock()
+  return JSON.parse(s.consignment_sale_outpoints(b64ToBytes(consignmentB64), network)) as string[]
+}
+
 /** The RGB a maker consignment delivers to the wallet's OWN seals — the trustless
  *  RGB-side delta for the confirmation screen and the #38 delivered-value gate. Runs on
  *  a throwaway scratch stock (the live stash is never mutated, gap A2); RGB delivered to

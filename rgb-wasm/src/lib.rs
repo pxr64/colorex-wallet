@@ -613,6 +613,57 @@ impl RgbStock {
         .to_string())
     }
 
+    /// List the outpoints a (provenance) consignment names as its terminal allocations — the set
+    /// the taker offered for sale — as JSON `["txid:vout", …]`. The consignment is validated +
+    /// accepted into a **FRESH, empty** scratch stock, so only THIS consignment's unspent terminals
+    /// surface (not the wallet's other holdings); reading them back is what the #38 sell-side
+    /// input-set check needs: the PSBT's spent RGB anchors MUST be a subset of these, else the
+    /// maker spliced in the taker's other UTXOs (the sweep). A consignment the dApp can't forge
+    /// (only the wallet exports a provenance consignment over its own outpoints).
+    pub fn consignment_sale_outpoints(
+        &self,
+        consignment: &[u8],
+        network: &str,
+    ) -> Result<String, JsError> {
+        let transfer = Transfer::load(consignment)
+            .map_err(|e| JsError::new(&format!("load consignment: {e}")))?;
+        let cn = chain_net(network)?;
+        let cid = transfer.contract_id();
+
+        // Mark every witness Mined at a placeholder position so `fungible()` surfaces the terminal
+        // allocations (mining soundness is enforced elsewhere; here we only read which outpoints the
+        // consignment delivers to). Mirrors `consignment_delivery_to_me`.
+        let pos = WitnessPos::bitcoin(NonZeroU32::new(100).unwrap(), 1_700_000_000)
+            .ok_or_else(|| JsError::new("bad witness pos"))?;
+        let mut ords: HashMap<Txid, WitnessOrd> = HashMap::new();
+        for bw in transfer.bundles.iter() {
+            if let Some(tx) = bw.pub_witness.tx() {
+                ords.insert(tx.txid(), WitnessOrd::Mined(pos));
+            }
+        }
+
+        // FRESH empty stock — so the only unspent allocations after accept are this consignment's
+        // terminals (the named sale outpoints), not the wallet's existing holdings.
+        let mut scratch = Stock::in_memory();
+        Self::validate_and_accept(&mut scratch, transfer, &ords, cn)?;
+
+        let contract = scratch
+            .contract_data(cid)
+            .map_err(|e| JsError::new(&format!("contract_data: {e}")))?;
+        let mut outpoints: Vec<String> = Vec::new();
+        for details in contract.schema.owned_types.values() {
+            if let Ok(allocs) = contract.fungible(details.name.clone(), &FilterIncludeAll) {
+                for alloc in allocs {
+                    let op = alloc.seal.to_outpoint().to_string();
+                    if !outpoints.contains(&op) {
+                        outpoints.push(op);
+                    }
+                }
+            }
+        }
+        serde_json::to_string(&outpoints).map_err(|e| JsError::new(&e.to_string()))
+    }
+
     /// Re-derive contract state from fresh witness ords WITHOUT re-accepting a
     /// consignment — the import queue's promote (Tentative→Mined) and revert
     /// (→Archived) primitive. `ords_json` is `[{ "txid", "height"?, "time"?,
